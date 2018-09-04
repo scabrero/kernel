@@ -689,7 +689,8 @@ int hmm_vma_fault(struct vm_area_struct *vma,
 	spin_unlock(&hmm->lock);
 
 	/* FIXME support hugetlb fs */
-	if (is_vm_hugetlb_page(vma) || (vma->vm_flags & VM_SPECIAL)) {
+	if (is_vm_hugetlb_page(vma) || (vma->vm_flags & VM_SPECIAL) ||
+			vma_is_dax(vma)) {
 		hmm_pfns_special(pfns, start, end);
 		return 0;
 	}
@@ -785,6 +786,8 @@ static int hmm_devmem_fault(struct vm_area_struct *vma,
 static void hmm_devmem_free(struct page *page, void *data)
 {
 	struct hmm_devmem *devmem = data;
+
+	page->mapping = NULL;
 
 	devmem->ops->free(devmem, page);
 }
