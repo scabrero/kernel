@@ -1224,12 +1224,15 @@ void __iwl_mvm_mac_stop(struct iwl_mvm *mvm)
 	iwl_mvm_del_aux_sta(mvm);
 
 	/*
-	 * Clear IN_HW_RESTART flag when stopping the hw (as restart_complete()
-	 * won't be called in this case).
+	 * Clear IN_HW_RESTART and HW_RESTART_REQUESTED flag when stopping the
+	 * hw (as restart_complete() won't be called in this case) and mac80211
+	 * won't execute the restart.
 	 * But make sure to cleanup interfaces that have gone down before/during
 	 * HW restart was requested.
 	 */
-	if (test_and_clear_bit(IWL_MVM_STATUS_IN_HW_RESTART, &mvm->status))
+	if (test_and_clear_bit(IWL_MVM_STATUS_IN_HW_RESTART, &mvm->status) ||
+	    test_and_clear_bit(IWL_MVM_STATUS_HW_RESTART_REQUESTED,
+			       &mvm->status))
 		ieee80211_iterate_interfaces(mvm->hw, 0,
 					     iwl_mvm_cleanup_iterator, mvm);
 
@@ -2647,7 +2650,7 @@ static int iwl_mvm_mac_sta_state(struct ieee80211_hw *hw,
 
 	mutex_lock(&mvm->mutex);
 	/* track whether or not the station is associated */
-	mvm_sta->associated = new_state >= IEEE80211_STA_ASSOC;
+	mvm_sta->sta_state = new_state;
 
 	if (old_state == IEEE80211_STA_NOTEXIST &&
 	    new_state == IEEE80211_STA_NONE) {
@@ -2699,8 +2702,7 @@ static int iwl_mvm_mac_sta_state(struct ieee80211_hw *hw,
 			iwl_mvm_mac_ctxt_changed(mvm, vif, false, NULL);
 		}
 
-		iwl_mvm_rs_rate_init(mvm, sta, mvmvif->phy_ctxt->channel->band,
-				     true);
+		iwl_mvm_rs_rate_init(mvm, sta, mvmvif->phy_ctxt->channel->band);
 		ret = iwl_mvm_update_sta(mvm, vif, sta);
 	} else if (old_state == IEEE80211_STA_ASSOC &&
 		   new_state == IEEE80211_STA_AUTHORIZED) {
@@ -2716,8 +2718,7 @@ static int iwl_mvm_mac_sta_state(struct ieee80211_hw *hw,
 		/* enable beacon filtering */
 		WARN_ON(iwl_mvm_enable_beacon_filter(mvm, vif, 0));
 
-		iwl_mvm_rs_rate_init(mvm, sta, mvmvif->phy_ctxt->channel->band,
-				     false);
+		iwl_mvm_rs_rate_init(mvm, sta, mvmvif->phy_ctxt->channel->band);
 
 		ret = 0;
 	} else if (old_state == IEEE80211_STA_AUTHORIZED &&
