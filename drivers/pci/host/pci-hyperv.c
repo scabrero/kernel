@@ -1315,7 +1315,6 @@ static u64 get_bar_size(u64 bar_val)
  */
 static void survey_child_resources(struct hv_pcibus_device *hbus)
 {
-	struct list_head *iter;
 	struct hv_pci_dev *hpdev;
 	resource_size_t bar_size = 0;
 	unsigned long flags;
@@ -1341,8 +1340,7 @@ static void survey_child_resources(struct hv_pcibus_device *hbus)
 	 * for a child device are a power of 2 in size and aligned in memory,
 	 * so it's sufficient to just add them up without tracking alignment.
 	 */
-	list_for_each(iter, &hbus->children) {
-		hpdev = container_of(iter, struct hv_pci_dev, list_entry);
+	list_for_each_entry(hpdev, &hbus->children, list_entry) {
 		for (i = 0; i < 6; i++) {
 			if (hpdev->probed_bar[i] & PCI_BASE_ADDRESS_SPACE_IO)
 				dev_err(&hbus->hdev->device,
@@ -1395,7 +1393,6 @@ static void prepopulate_bars(struct hv_pcibus_device *hbus)
 	resource_size_t low_base = 0;
 	resource_size_t bar_size;
 	struct hv_pci_dev *hpdev;
-	struct list_head *iter;
 	unsigned long flags;
 	u64 bar_val;
 	u32 command;
@@ -1417,9 +1414,7 @@ static void prepopulate_bars(struct hv_pcibus_device *hbus)
 
 	/* Pick addresses for the BARs. */
 	do {
-		list_for_each(iter, &hbus->children) {
-			hpdev = container_of(iter, struct hv_pci_dev,
-					     list_entry);
+		list_for_each_entry(hpdev, &hbus->children, list_entry) {
 			for (i = 0; i < 6; i++) {
 				bar_val = hpdev->probed_bar[i];
 				if (bar_val == 0)
@@ -1663,7 +1658,6 @@ static void pci_devices_present_work(struct work_struct *work)
 {
 	u32 child_no;
 	bool found;
-	struct list_head *iter;
 	struct pci_function_description *new_desc;
 	struct hv_pci_dev *hpdev;
 	struct hv_pcibus_device *hbus;
@@ -1700,10 +1694,8 @@ static void pci_devices_present_work(struct work_struct *work)
 
 	/* First, mark all existing children as reported missing. */
 	spin_lock_irqsave(&hbus->device_list_lock, flags);
-	list_for_each(iter, &hbus->children) {
-			hpdev = container_of(iter, struct hv_pci_dev,
-					     list_entry);
-			hpdev->reported_missing = true;
+	list_for_each_entry(hpdev, &hbus->children, list_entry) {
+		hpdev->reported_missing = true;
 	}
 	spin_unlock_irqrestore(&hbus->device_list_lock, flags);
 
@@ -1713,11 +1705,8 @@ static void pci_devices_present_work(struct work_struct *work)
 		new_desc = &dr->func[child_no];
 
 		spin_lock_irqsave(&hbus->device_list_lock, flags);
-		list_for_each(iter, &hbus->children) {
-			hpdev = container_of(iter, struct hv_pci_dev,
-					     list_entry);
-			if ((hpdev->desc.win_slot.slot ==
-			     new_desc->win_slot.slot) &&
+		list_for_each_entry(hpdev, &hbus->children, list_entry) {
+			if ((hpdev->desc.win_slot.slot == new_desc->win_slot.slot) &&
 			    (hpdev->desc.v_id == new_desc->v_id) &&
 			    (hpdev->desc.d_id == new_desc->d_id) &&
 			    (hpdev->desc.ser == new_desc->ser)) {
@@ -1739,9 +1728,7 @@ static void pci_devices_present_work(struct work_struct *work)
 	spin_lock_irqsave(&hbus->device_list_lock, flags);
 	do {
 		found = false;
-		list_for_each(iter, &hbus->children) {
-			hpdev = container_of(iter, struct hv_pci_dev,
-					     list_entry);
+		list_for_each_entry(hpdev, &hbus->children, list_entry) {
 			if (hpdev->reported_missing) {
 				found = true;
 				put_pcichild(hpdev);
