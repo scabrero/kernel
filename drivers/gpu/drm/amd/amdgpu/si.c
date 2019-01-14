@@ -24,7 +24,7 @@
 #include <linux/firmware.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include "drmP.h"
+#include <drm/drmP.h>
 #include "amdgpu.h"
 #include "amdgpu_atombios.h"
 #include "amdgpu_ih.h"
@@ -32,7 +32,7 @@
 #include "amdgpu_vce.h"
 #include "atom.h"
 #include "amd_pcie.h"
-#include "amdgpu_powerplay.h"
+#include "si_dpm.h"
 #include "sid.h"
 #include "si_ih.h"
 #include "gfx_v6_0.h"
@@ -972,44 +972,44 @@ static void si_smc_wreg(struct amdgpu_device *adev, u32 reg, u32 v)
 }
 
 static struct amdgpu_allowed_register_entry si_allowed_read_registers[] = {
-	{GRBM_STATUS, false},
-	{GB_ADDR_CONFIG, false},
-	{MC_ARB_RAMCFG, false},
-	{GB_TILE_MODE0, false},
-	{GB_TILE_MODE1, false},
-	{GB_TILE_MODE2, false},
-	{GB_TILE_MODE3, false},
-	{GB_TILE_MODE4, false},
-	{GB_TILE_MODE5, false},
-	{GB_TILE_MODE6, false},
-	{GB_TILE_MODE7, false},
-	{GB_TILE_MODE8, false},
-	{GB_TILE_MODE9, false},
-	{GB_TILE_MODE10, false},
-	{GB_TILE_MODE11, false},
-	{GB_TILE_MODE12, false},
-	{GB_TILE_MODE13, false},
-	{GB_TILE_MODE14, false},
-	{GB_TILE_MODE15, false},
-	{GB_TILE_MODE16, false},
-	{GB_TILE_MODE17, false},
-	{GB_TILE_MODE18, false},
-	{GB_TILE_MODE19, false},
-	{GB_TILE_MODE20, false},
-	{GB_TILE_MODE21, false},
-	{GB_TILE_MODE22, false},
-	{GB_TILE_MODE23, false},
-	{GB_TILE_MODE24, false},
-	{GB_TILE_MODE25, false},
-	{GB_TILE_MODE26, false},
-	{GB_TILE_MODE27, false},
-	{GB_TILE_MODE28, false},
-	{GB_TILE_MODE29, false},
-	{GB_TILE_MODE30, false},
-	{GB_TILE_MODE31, false},
-	{CC_RB_BACKEND_DISABLE, false, true},
-	{GC_USER_RB_BACKEND_DISABLE, false, true},
-	{PA_SC_RASTER_CONFIG, false, true},
+	{GRBM_STATUS},
+	{GB_ADDR_CONFIG},
+	{MC_ARB_RAMCFG},
+	{GB_TILE_MODE0},
+	{GB_TILE_MODE1},
+	{GB_TILE_MODE2},
+	{GB_TILE_MODE3},
+	{GB_TILE_MODE4},
+	{GB_TILE_MODE5},
+	{GB_TILE_MODE6},
+	{GB_TILE_MODE7},
+	{GB_TILE_MODE8},
+	{GB_TILE_MODE9},
+	{GB_TILE_MODE10},
+	{GB_TILE_MODE11},
+	{GB_TILE_MODE12},
+	{GB_TILE_MODE13},
+	{GB_TILE_MODE14},
+	{GB_TILE_MODE15},
+	{GB_TILE_MODE16},
+	{GB_TILE_MODE17},
+	{GB_TILE_MODE18},
+	{GB_TILE_MODE19},
+	{GB_TILE_MODE20},
+	{GB_TILE_MODE21},
+	{GB_TILE_MODE22},
+	{GB_TILE_MODE23},
+	{GB_TILE_MODE24},
+	{GB_TILE_MODE25},
+	{GB_TILE_MODE26},
+	{GB_TILE_MODE27},
+	{GB_TILE_MODE28},
+	{GB_TILE_MODE29},
+	{GB_TILE_MODE30},
+	{GB_TILE_MODE31},
+	{CC_RB_BACKEND_DISABLE, true},
+	{GC_USER_RB_BACKEND_DISABLE, true},
+	{PA_SC_RASTER_CONFIG, true},
 };
 
 static uint32_t si_get_register_value(struct amdgpu_device *adev,
@@ -1094,13 +1094,13 @@ static int si_read_register(struct amdgpu_device *adev, u32 se_num,
 
 	*value = 0;
 	for (i = 0; i < ARRAY_SIZE(si_allowed_read_registers); i++) {
+		bool indexed = si_allowed_read_registers[i].grbm_indexed;
+
 		if (reg_offset != si_allowed_read_registers[i].reg_offset)
 			continue;
 
-		if (!si_allowed_read_registers[i].untouched)
-			*value = si_get_register_value(adev,
-						si_allowed_read_registers[i].grbm_indexed,
-						se_num, sh_num, reg_offset);
+		*value = si_get_register_value(adev, indexed, se_num, sh_num,
+					       reg_offset);
 		return 0;
 	}
 	return -EINVAL;
@@ -1149,6 +1149,33 @@ static bool si_read_disabled_bios(struct amdgpu_device *adev)
 	}
 	WREG32(R600_ROM_CNTL, rom_cntl);
 	return r;
+}
+
+#define mmROM_INDEX 0x2A
+#define mmROM_DATA  0x2B
+
+static bool si_read_bios_from_rom(struct amdgpu_device *adev,
+				  u8 *bios, u32 length_bytes)
+{
+	u32 *dw_ptr;
+	u32 i, length_dw;
+
+	if (bios == NULL)
+		return false;
+	if (length_bytes == 0)
+		return false;
+	/* APU vbios image is part of sbios image */
+	if (adev->flags & AMD_IS_APU)
+		return false;
+
+	dw_ptr = (u32 *)bios;
+	length_dw = ALIGN(length_bytes, 4) / 4;
+	/* set rom index to 0 */
+	WREG32(mmROM_INDEX, 0);
+	for (i = 0; i < length_dw; i++)
+		dw_ptr[i] = RREG32(mmROM_DATA);
+
+	return true;
 }
 
 //xxx: not implemented
@@ -1202,6 +1229,33 @@ static void si_detect_hw_virtualization(struct amdgpu_device *adev)
 {
 	if (is_virtual_machine()) /* passthrough mode */
 		adev->virt.caps |= AMDGPU_PASSTHROUGH_MODE;
+}
+
+static void si_flush_hdp(struct amdgpu_device *adev, struct amdgpu_ring *ring)
+{
+	if (!ring || !ring->funcs->emit_wreg) {
+		WREG32(mmHDP_MEM_COHERENCY_FLUSH_CNTL, 1);
+		RREG32(mmHDP_MEM_COHERENCY_FLUSH_CNTL);
+	} else {
+		amdgpu_ring_emit_wreg(ring, mmHDP_MEM_COHERENCY_FLUSH_CNTL, 1);
+	}
+}
+
+static void si_invalidate_hdp(struct amdgpu_device *adev,
+			      struct amdgpu_ring *ring)
+{
+	if (!ring || !ring->funcs->emit_wreg) {
+		WREG32(mmHDP_DEBUG0, 1);
+		RREG32(mmHDP_DEBUG0);
+	} else {
+		amdgpu_ring_emit_wreg(ring, mmHDP_DEBUG0, 1);
+	}
+}
+
+static bool si_need_full_reset(struct amdgpu_device *adev)
+{
+	/* change this when we support soft reset */
+	return true;
 }
 
 static int si_get_pcie_lanes(struct amdgpu_device *adev)
@@ -1272,6 +1326,7 @@ static void si_set_pcie_lanes(struct amdgpu_device *adev, int lanes)
 static const struct amdgpu_asic_funcs si_asic_funcs =
 {
 	.read_disabled_bios = &si_read_disabled_bios,
+	.read_bios_from_rom = &si_read_bios_from_rom,
 	.read_register = &si_read_register,
 	.reset = &si_asic_reset,
 	.set_vga_state = &si_vga_set_state,
@@ -1281,6 +1336,9 @@ static const struct amdgpu_asic_funcs si_asic_funcs =
 	.get_pcie_lanes = &si_get_pcie_lanes,
 	.set_pcie_lanes = &si_set_pcie_lanes,
 	.get_config_memsize = &si_get_config_memsize,
+	.flush_hdp = &si_flush_hdp,
+	.invalidate_hdp = &si_invalidate_hdp,
+	.need_full_reset = &si_need_full_reset,
 };
 
 static uint32_t si_get_rev_id(struct amdgpu_device *adev)
@@ -1430,65 +1488,65 @@ static void si_init_golden_registers(struct amdgpu_device *adev)
 {
 	switch (adev->asic_type) {
 	case CHIP_TAHITI:
-		amdgpu_program_register_sequence(adev,
-						 tahiti_golden_registers,
-						 (const u32)ARRAY_SIZE(tahiti_golden_registers));
-		amdgpu_program_register_sequence(adev,
-						 tahiti_golden_rlc_registers,
-						 (const u32)ARRAY_SIZE(tahiti_golden_rlc_registers));
-		amdgpu_program_register_sequence(adev,
-						 tahiti_mgcg_cgcg_init,
-						 (const u32)ARRAY_SIZE(tahiti_mgcg_cgcg_init));
-		amdgpu_program_register_sequence(adev,
-						 tahiti_golden_registers2,
-						 (const u32)ARRAY_SIZE(tahiti_golden_registers2));
+		amdgpu_device_program_register_sequence(adev,
+							tahiti_golden_registers,
+							ARRAY_SIZE(tahiti_golden_registers));
+		amdgpu_device_program_register_sequence(adev,
+							tahiti_golden_rlc_registers,
+							ARRAY_SIZE(tahiti_golden_rlc_registers));
+		amdgpu_device_program_register_sequence(adev,
+							tahiti_mgcg_cgcg_init,
+							ARRAY_SIZE(tahiti_mgcg_cgcg_init));
+		amdgpu_device_program_register_sequence(adev,
+							tahiti_golden_registers2,
+							ARRAY_SIZE(tahiti_golden_registers2));
 		break;
 	case CHIP_PITCAIRN:
-		amdgpu_program_register_sequence(adev,
-						 pitcairn_golden_registers,
-						 (const u32)ARRAY_SIZE(pitcairn_golden_registers));
-		amdgpu_program_register_sequence(adev,
-						 pitcairn_golden_rlc_registers,
-						 (const u32)ARRAY_SIZE(pitcairn_golden_rlc_registers));
-		amdgpu_program_register_sequence(adev,
-						 pitcairn_mgcg_cgcg_init,
-						 (const u32)ARRAY_SIZE(pitcairn_mgcg_cgcg_init));
+		amdgpu_device_program_register_sequence(adev,
+							pitcairn_golden_registers,
+							ARRAY_SIZE(pitcairn_golden_registers));
+		amdgpu_device_program_register_sequence(adev,
+							pitcairn_golden_rlc_registers,
+							ARRAY_SIZE(pitcairn_golden_rlc_registers));
+		amdgpu_device_program_register_sequence(adev,
+							pitcairn_mgcg_cgcg_init,
+							ARRAY_SIZE(pitcairn_mgcg_cgcg_init));
 		break;
 	case CHIP_VERDE:
-		amdgpu_program_register_sequence(adev,
-						 verde_golden_registers,
-						 (const u32)ARRAY_SIZE(verde_golden_registers));
-		amdgpu_program_register_sequence(adev,
-						 verde_golden_rlc_registers,
-						 (const u32)ARRAY_SIZE(verde_golden_rlc_registers));
-		amdgpu_program_register_sequence(adev,
-						 verde_mgcg_cgcg_init,
-						 (const u32)ARRAY_SIZE(verde_mgcg_cgcg_init));
-		amdgpu_program_register_sequence(adev,
-						 verde_pg_init,
-						 (const u32)ARRAY_SIZE(verde_pg_init));
+		amdgpu_device_program_register_sequence(adev,
+							verde_golden_registers,
+							ARRAY_SIZE(verde_golden_registers));
+		amdgpu_device_program_register_sequence(adev,
+							verde_golden_rlc_registers,
+							ARRAY_SIZE(verde_golden_rlc_registers));
+		amdgpu_device_program_register_sequence(adev,
+							verde_mgcg_cgcg_init,
+							ARRAY_SIZE(verde_mgcg_cgcg_init));
+		amdgpu_device_program_register_sequence(adev,
+							verde_pg_init,
+							ARRAY_SIZE(verde_pg_init));
 		break;
 	case CHIP_OLAND:
-		amdgpu_program_register_sequence(adev,
-						 oland_golden_registers,
-						 (const u32)ARRAY_SIZE(oland_golden_registers));
-		amdgpu_program_register_sequence(adev,
-						 oland_golden_rlc_registers,
-						 (const u32)ARRAY_SIZE(oland_golden_rlc_registers));
-		amdgpu_program_register_sequence(adev,
-						 oland_mgcg_cgcg_init,
-						 (const u32)ARRAY_SIZE(oland_mgcg_cgcg_init));
+		amdgpu_device_program_register_sequence(adev,
+							oland_golden_registers,
+							ARRAY_SIZE(oland_golden_registers));
+		amdgpu_device_program_register_sequence(adev,
+							oland_golden_rlc_registers,
+							ARRAY_SIZE(oland_golden_rlc_registers));
+		amdgpu_device_program_register_sequence(adev,
+							oland_mgcg_cgcg_init,
+							ARRAY_SIZE(oland_mgcg_cgcg_init));
 		break;
 	case CHIP_HAINAN:
-		amdgpu_program_register_sequence(adev,
-						 hainan_golden_registers,
-						 (const u32)ARRAY_SIZE(hainan_golden_registers));
-		amdgpu_program_register_sequence(adev,
-						 hainan_golden_registers2,
-						 (const u32)ARRAY_SIZE(hainan_golden_registers2));
-		amdgpu_program_register_sequence(adev,
-						 hainan_mgcg_cgcg_init,
-						 (const u32)ARRAY_SIZE(hainan_mgcg_cgcg_init));
+		amdgpu_device_program_register_sequence(adev,
+							hainan_golden_registers,
+							ARRAY_SIZE(hainan_golden_registers));
+		amdgpu_device_program_register_sequence(adev,
+							hainan_golden_registers2,
+							ARRAY_SIZE(hainan_golden_registers2));
+		amdgpu_device_program_register_sequence(adev,
+							hainan_mgcg_cgcg_init,
+							ARRAY_SIZE(hainan_mgcg_cgcg_init));
 		break;
 
 
@@ -1996,42 +2054,42 @@ int si_set_ip_blocks(struct amdgpu_device *adev)
 	case CHIP_VERDE:
 	case CHIP_TAHITI:
 	case CHIP_PITCAIRN:
-		amdgpu_ip_block_add(adev, &si_common_ip_block);
-		amdgpu_ip_block_add(adev, &gmc_v6_0_ip_block);
-		amdgpu_ip_block_add(adev, &si_ih_ip_block);
-		amdgpu_ip_block_add(adev, &amdgpu_pp_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_common_ip_block);
+		amdgpu_device_ip_block_add(adev, &gmc_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_ih_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_smu_ip_block);
 		if (adev->enable_virtual_display)
-			amdgpu_ip_block_add(adev, &dce_virtual_ip_block);
+			amdgpu_device_ip_block_add(adev, &dce_virtual_ip_block);
 		else
-			amdgpu_ip_block_add(adev, &dce_v6_0_ip_block);
-		amdgpu_ip_block_add(adev, &gfx_v6_0_ip_block);
-		amdgpu_ip_block_add(adev, &si_dma_ip_block);
-		/* amdgpu_ip_block_add(adev, &uvd_v3_1_ip_block); */
-		/* amdgpu_ip_block_add(adev, &vce_v1_0_ip_block); */
+			amdgpu_device_ip_block_add(adev, &dce_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &gfx_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_dma_ip_block);
+		/* amdgpu_device_ip_block_add(adev, &uvd_v3_1_ip_block); */
+		/* amdgpu_device_ip_block_add(adev, &vce_v1_0_ip_block); */
 		break;
 	case CHIP_OLAND:
-		amdgpu_ip_block_add(adev, &si_common_ip_block);
-		amdgpu_ip_block_add(adev, &gmc_v6_0_ip_block);
-		amdgpu_ip_block_add(adev, &si_ih_ip_block);
-		amdgpu_ip_block_add(adev, &amdgpu_pp_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_common_ip_block);
+		amdgpu_device_ip_block_add(adev, &gmc_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_ih_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_smu_ip_block);
 		if (adev->enable_virtual_display)
-			amdgpu_ip_block_add(adev, &dce_virtual_ip_block);
+			amdgpu_device_ip_block_add(adev, &dce_virtual_ip_block);
 		else
-			amdgpu_ip_block_add(adev, &dce_v6_4_ip_block);
-		amdgpu_ip_block_add(adev, &gfx_v6_0_ip_block);
-		amdgpu_ip_block_add(adev, &si_dma_ip_block);
-		/* amdgpu_ip_block_add(adev, &uvd_v3_1_ip_block); */
-		/* amdgpu_ip_block_add(adev, &vce_v1_0_ip_block); */
+			amdgpu_device_ip_block_add(adev, &dce_v6_4_ip_block);
+		amdgpu_device_ip_block_add(adev, &gfx_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_dma_ip_block);
+		/* amdgpu_device_ip_block_add(adev, &uvd_v3_1_ip_block); */
+		/* amdgpu_device_ip_block_add(adev, &vce_v1_0_ip_block); */
 		break;
 	case CHIP_HAINAN:
-		amdgpu_ip_block_add(adev, &si_common_ip_block);
-		amdgpu_ip_block_add(adev, &gmc_v6_0_ip_block);
-		amdgpu_ip_block_add(adev, &si_ih_ip_block);
-		amdgpu_ip_block_add(adev, &amdgpu_pp_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_common_ip_block);
+		amdgpu_device_ip_block_add(adev, &gmc_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_ih_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_smu_ip_block);
 		if (adev->enable_virtual_display)
-			amdgpu_ip_block_add(adev, &dce_virtual_ip_block);
-		amdgpu_ip_block_add(adev, &gfx_v6_0_ip_block);
-		amdgpu_ip_block_add(adev, &si_dma_ip_block);
+			amdgpu_device_ip_block_add(adev, &dce_virtual_ip_block);
+		amdgpu_device_ip_block_add(adev, &gfx_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_dma_ip_block);
 		break;
 	default:
 		BUG();

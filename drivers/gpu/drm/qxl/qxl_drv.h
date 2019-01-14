@@ -36,20 +36,18 @@
 #include <linux/firmware.h>
 #include <linux/platform_device.h>
 
-#include "drmP.h"
-#include "drm_crtc.h"
-#include <ttm/ttm_bo_api.h>
-#include <ttm/ttm_bo_driver.h>
-#include <ttm/ttm_placement.h>
-#include <ttm/ttm_module.h>
-
+#include <drm/drm_crtc.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_gem.h>
-
+#include <drm/drmP.h>
+#include <drm/ttm/ttm_bo_api.h>
+#include <drm/ttm/ttm_bo_driver.h>
 /* just for ttm_validate_buffer */
-#include <ttm/ttm_execbuf_util.h>
-
+#include <drm/ttm/ttm_execbuf_util.h>
+#include <drm/ttm/ttm_module.h>
+#include <drm/ttm/ttm_placement.h>
 #include <drm/qxl_drm.h>
+
 #include "qxl_dev.h"
 
 #define DRIVER_AUTHOR		"Dave Airlie"
@@ -65,6 +63,7 @@
 #define QXL_DEBUGFS_MAX_COMPONENTS		32
 
 extern int qxl_num_crtc;
+extern int qxl_max_ioctls;
 
 #define DRM_FILE_OFFSET 0x100000000ULL
 #define DRM_FILE_PAGE_OFFSET (DRM_FILE_OFFSET >> PAGE_SHIFT)
@@ -168,6 +167,7 @@ struct qxl_release {
 
 	int id;
 	int type;
+	struct qxl_bo *release_bo;
 	uint32_t release_offset;
 	uint32_t surface_release_id;
 	struct ww_acquire_ctx ticket;
@@ -298,9 +298,6 @@ struct qxl_device {
 	int monitors_config_width;
 	int monitors_config_height;
 };
-
-/* forward declaration for QXL_INFO_IO */
-__printf(2,3) void qxl_io_log(struct qxl_device *qdev, const char *fmt, ...);
 
 extern const struct drm_ioctl_desc qxl_ioctls[];
 extern int qxl_max_ioctl;

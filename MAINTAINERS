@@ -731,12 +731,14 @@ F:	drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd.c
 F:	drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd.h
 F:	drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v7.c
 F:	drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v8.c
+F:	drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v9.c
+F:	drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_fence.c
+F:	drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gpuvm.c
 F:	drivers/gpu/drm/amd/amdkfd/
 F:	drivers/gpu/drm/amd/include/cik_structs.h
 F:	drivers/gpu/drm/amd/include/kgd_kfd_interface.h
 F:	drivers/gpu/drm/amd/include/vi_structs.h
-F:	drivers/gpu/drm/radeon/radeon_kfd.c
-F:	drivers/gpu/drm/radeon/radeon_kfd.h
+F:	drivers/gpu/drm/amd/include/v9_structs.h
 F:	include/uapi/linux/kfd_ioctl.h
 
 AMD SEATTLE DEVICE TREE SUPPORT
@@ -4263,6 +4265,19 @@ F:	include/drm/drm*
 F:	include/uapi/drm/drm*
 F:	include/linux/vga*
 
+DRM DRIVER FOR ARM PL111 CLCD
+M:	Eric Anholt <eric@anholt.net>
+T:	git git://anongit.freedesktop.org/drm/drm-misc
+S:	Supported
+F:	drivers/gpu/drm/pl111/
+
+DRM DRIVER FOR ARM VERSATILE TFT PANELS
+M:	Linus Walleij <linus.walleij@linaro.org>
+T:	git git://anongit.freedesktop.org/drm/drm-misc
+S:	Maintained
+F:	drivers/gpu/drm/panel/panel-arm-versatile.c
+F:	Documentation/devicetree/bindings/display/panel/arm,versatile-tft-panel.txt
+
 DRM DRIVER FOR AST SERVER GRAPHICS CHIPS
 M:	Dave Airlie <airlied@redhat.com>
 S:	Odd Fixes
@@ -4280,6 +4295,12 @@ L:	virtualization@lists.linux-foundation.org
 T:	git git://anongit.freedesktop.org/drm/drm-misc
 S:	Maintained
 F:	drivers/gpu/drm/bochs/
+
+DRM DRIVER FOR FARADAY TVE200 TV ENCODER
+M:	Linus Walleij <linus.walleij@linaro.org>
+T:	git git://anongit.freedesktop.org/drm/drm-misc
+S:	Maintained
+F:	drivers/gpu/drm/tve200/
 
 DRM DRIVER FOR QEMU'S CIRRUS DEVICE
 M:	Dave Airlie <airlied@redhat.com>
@@ -4412,6 +4433,18 @@ S:	Maintained
 F:	drivers/gpu/drm/hisilicon/
 F:	Documentation/devicetree/bindings/display/hisilicon/
 
+DRM DRIVER FOR ILITEK ILI9225 PANELS
+M:	David Lechner <david@lechnology.com>
+S:	Maintained
+F:	drivers/gpu/drm/tinydrm/ili9225.c
+F:	Documentation/devicetree/bindings/display/ili9225.txt
+
+DRM DRIVER FOR ILITEK ILI9341 PANELS
+M:	David Lechner <david@lechnology.com>
+S:	Maintained
+F:	drivers/gpu/drm/tinydrm/ili9341.c
+F:	Documentation/devicetree/bindings/display/ilitek,ili9341.txt
+
 DRM DRIVER FOR INTEL I810 VIDEO CARDS
 S:	Orphan / Obsolete
 F:	drivers/gpu/drm/i810/
@@ -4473,6 +4506,12 @@ M:	Dave Airlie <airlied@redhat.com>
 S:	Odd Fixes
 F:	drivers/gpu/drm/mgag200/
 
+DRM DRIVER FOR PERVASIVE DISPLAYS REPAPER PANELS
+M:	Noralf Trønnes <noralf@tronnes.org>
+S:	Maintained
+F:	drivers/gpu/drm/tinydrm/repaper.c
+F:	Documentation/devicetree/bindings/display/repaper.txt
+
 DRM DRIVER FOR RAGE 128 VIDEO CARDS
 S:	Orphan / Obsolete
 F:	drivers/gpu/drm/r128/
@@ -4517,6 +4556,18 @@ S:	Orphan / Obsolete
 F:	drivers/gpu/drm/sis/
 F:	include/uapi/drm/sis_drm.h
 
+DRM DRIVER FOR SITRONIX ST7586 PANELS
+M:	David Lechner <david@lechnology.com>
+S:	Maintained
+F:	drivers/gpu/drm/tinydrm/st7586.c
+F:	Documentation/devicetree/bindings/display/st7586.txt
+
+DRM DRIVER FOR SITRONIX ST7735R PANELS
+M:	David Lechner <david@lechnology.com>
+S:	Maintained
+F:	drivers/gpu/drm/tinydrm/st7735r.c
+F:	Documentation/devicetree/bindings/display/st7735r.txt
+
 DRM DRIVERS FOR STI
 M:	Benjamin Gaignard <benjamin.gaignard@linaro.org>
 M:	Vincent Abriou <vincent.abriou@st.com>
@@ -4556,6 +4607,14 @@ T:	git git://people.freedesktop.org/~thomash/linux
 S:	Supported
 F:	drivers/gpu/drm/vmwgfx/
 F:	include/uapi/drm/vmwgfx_drm.h
+
+DRM DRIVERS FOR V3D
+M:	Eric Anholt <eric@anholt.net>
+S:	Supported
+F:	drivers/gpu/drm/v3d/
+F:	include/uapi/drm/v3d_drm.h
+F:	Documentation/devicetree/bindings/display/brcm,bcm-v3d.txt
+T:	git git://anongit.freedesktop.org/drm/drm-misc
 
 DRM DRIVERS FOR VC4
 M:	Eric Anholt <eric@anholt.net>
@@ -7611,6 +7670,13 @@ M:	Sasha Levin <sasha.levin@oracle.com>
 S:	Maintained
 F:	tools/lib/lockdep/
 
+LIBNVDIMM: DEVICETREE BINDINGS
+M:	Oliver O'Halloran <oohall@gmail.com>
+L:	linux-nvdimm@lists.01.org
+Q:	https://patchwork.kernel.org/project/linux-nvdimm/list/
+S:	Supported
+F:	drivers/nvdimm/of_pmem.c
+
 LIBNVDIMM: NON-VOLATILE MEMORY DEVICE SUBSYSTEM
 M:	Dan Williams <dan.j.williams@intel.com>
 L:	linux-nvdimm@lists.01.org
@@ -7651,9 +7717,7 @@ M:	Ross Zwisler <ross.zwisler@linux.intel.com>
 L:	linux-nvdimm@lists.01.org
 Q:	https://patchwork.kernel.org/project/linux-nvdimm/list/
 S:	Supported
-F:	drivers/nvdimm/pmem.c
-F:	include/linux/pmem.h
-F:	arch/*/include/asm/pmem.h
+F:	drivers/nvdimm/pmem*
 
 LIGHTNVM PLATFORM SUPPORT
 M:	Matias Bjorling <mb@lightnvm.io>
@@ -8037,6 +8101,12 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	drivers/net/ethernet/marvell/mv643xx_eth.*
 F:	include/linux/mv643xx.h
+
+MARVELL MV88X3310 PHY DRIVER
+M:	Russell King <rmk@armlinux.org.uk>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	drivers/net/phy/marvell10g.c
 
 MARVELL MVNETA ETHERNET DRIVER
 M:	Thomas Petazzoni <thomas.petazzoni@free-electrons.com>
@@ -13534,6 +13604,12 @@ F:	Documentation/ABI/testing/sysfs-bus-typec
 F:	Documentation/driver-api/usb/typec_bus.rst
 F:	drivers/usb/typec/altmodes/
 F:	include/linux/usb/typec_altmode.h
+
+USB TYPEC PORT CONTROLLER DRIVERS
+M:	Guenter Roeck <linux@roeck-us.net>
+L:	linux-usb@vger.kernel.org
+S:	Maintained
+F:	drivers/usb/typec/tcpm/
 
 USB UHCI DRIVER
 M:	Alan Stern <stern@rowland.harvard.edu>

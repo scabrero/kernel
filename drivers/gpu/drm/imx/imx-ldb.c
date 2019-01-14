@@ -143,7 +143,7 @@ static int imx_ldb_connector_get_modes(struct drm_connector *connector)
 		imx_ldb_ch->edid = drm_get_edid(connector, imx_ldb_ch->ddc);
 
 	if (imx_ldb_ch->edid) {
-		drm_mode_connector_update_edid_property(connector,
+		drm_connector_update_edid_property(connector,
 							imx_ldb_ch->edid);
 		num_modes = drm_add_edid_modes(connector, imx_ldb_ch->edid);
 	}
@@ -389,7 +389,6 @@ static int imx_ldb_encoder_atomic_check(struct drm_encoder *encoder,
 
 
 static const struct drm_connector_funcs imx_ldb_connector_funcs = {
-	.dpms = drm_atomic_helper_connector_dpms,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = imx_drm_connector_destroy,
 	.reset = drm_atomic_helper_connector_reset,
@@ -472,8 +471,7 @@ static int imx_ldb_register(struct drm_device *drm,
 		drm_connector_init(drm, &imx_ldb_ch->connector,
 				&imx_ldb_connector_funcs,
 				DRM_MODE_CONNECTOR_LVDS);
-		drm_mode_connector_attach_encoder(&imx_ldb_ch->connector,
-				encoder);
+		drm_connector_attach_encoder(&imx_ldb_ch->connector, encoder);
 	}
 
 	if (imx_ldb_ch->panel) {

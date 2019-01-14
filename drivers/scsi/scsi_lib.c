@@ -237,7 +237,7 @@ void scsi_queue_insert(struct scsi_cmnd *cmd, int reason)
 
 
 /**
- * scsi_execute - insert request and wait for the result
+ * __scsi_execute - insert request and wait for the result
  * @sdev:	scsi device
  * @cmd:	scsi command
  * @data_direction: data direction
@@ -254,7 +254,7 @@ void scsi_queue_insert(struct scsi_cmnd *cmd, int reason)
  * Returns the scsi_cmnd result field if a command was executed, or a negative
  * Linux error code if we didn't get that far.
  */
-int scsi_execute(struct scsi_device *sdev, const unsigned char *cmd,
+int __scsi_execute(struct scsi_device *sdev, const unsigned char *cmd,
 		 int data_direction, void *buffer, unsigned bufflen,
 		 unsigned char *sense, struct scsi_sense_hdr *sshdr,
 		 int timeout, int retries, u64 flags, req_flags_t rq_flags,
@@ -308,7 +308,7 @@ int scsi_execute(struct scsi_device *sdev, const unsigned char *cmd,
 
 	return ret;
 }
-EXPORT_SYMBOL(scsi_execute);
+EXPORT_SYMBOL(__scsi_execute);
 
 /*
  * Function:    scsi_init_cmd_errh()
@@ -695,6 +695,12 @@ static bool scsi_end_request(struct request *req, blk_status_t error,
 		 */
 		scsi_mq_uninit_cmd(cmd);
 
+		/*
+		 * queue is still alive, so grab the ref for preventing it
+		 * from being cleaned up during running queue.
+		 */
+		percpu_ref_get(&q->q_usage_counter);
+
 		__blk_mq_end_request(req, error);
 
 		if (scsi_target(sdev)->single_lun ||
@@ -702,6 +708,8 @@ static bool scsi_end_request(struct request *req, blk_status_t error,
 			kblockd_schedule_work(&sdev->requeue_work);
 		else
 			blk_mq_run_hw_queues(q, true);
+
+		percpu_ref_put(&q->q_usage_counter);
 	} else {
 		unsigned long flags;
 
@@ -984,6 +992,10 @@ void scsi_io_completion(struct scsi_cmnd *cmd, unsigned int good_bytes)
 				case 0x08: /* Long write in progress */
 				case 0x09: /* self test in progress */
 				case 0x14: /* space allocation in progress */
+				case 0x1a: /* start stop unit in progress */
+				case 0x1b: /* sanitize in progress */
+				case 0x1d: /* configuration in progress */
+				case 0x24: /* depopulation in progress */
 					action = ACTION_DELAYED_RETRY;
 					break;
 				default:

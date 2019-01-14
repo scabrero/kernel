@@ -32,7 +32,9 @@
 
 struct drm_fb_helper;
 
+#include <drm/drm_client.h>
 #include <drm/drm_crtc.h>
+#include <drm/drm_device.h>
 #include <linux/kgdb.h>
 
 enum mode_set_atomic {
@@ -85,38 +87,6 @@ struct drm_fb_helper_surface_size {
  * Driver callbacks used by the fbdev emulation helper library.
  */
 struct drm_fb_helper_funcs {
-	/**
-	 * @gamma_set:
-	 *
-	 * Set the given gamma LUT register on the given CRTC.
-	 *
-	 * This callback is optional.
-	 *
-	 * FIXME:
-	 *
-	 * This callback is functionally redundant with the core gamma table
-	 * support and simply exists because the fbdev hasn't yet been
-	 * refactored to use the core gamma table interfaces.
-	 */
-	void (*gamma_set)(struct drm_crtc *crtc, u16 red, u16 green,
-			  u16 blue, int regno);
-	/**
-	 * @gamma_get:
-	 *
-	 * Read the given gamma LUT register on the given CRTC, used to save the
-	 * current LUT when force-restoring the fbdev for e.g. kdbg.
-	 *
-	 * This callback is optional.
-	 *
-	 * FIXME:
-	 *
-	 * This callback is functionally redundant with the core gamma table
-	 * support and simply exists because the fbdev hasn't yet been
-	 * refactored to use the core gamma table interfaces.
-	 */
-	void (*gamma_get)(struct drm_crtc *crtc, u16 *red, u16 *green,
-			  u16 *blue, int regno);
-
 	/**
 	 * @fb_probe:
 	 *
@@ -185,6 +155,20 @@ struct drm_fb_helper_connector {
  * operations.
  */
 struct drm_fb_helper {
+	/**
+	 * @client:
+	 *
+	 * DRM client used by the generic fbdev emulation.
+	 */
+	struct drm_client_dev client;
+
+	/**
+	 * @buffer:
+	 *
+	 * Framebuffer used by the generic fbdev emulation.
+	 */
+	struct drm_client_buffer *buffer;
+
 	struct drm_framebuffer *fb;
 	struct drm_device *dev;
 	int crtc_count;
@@ -265,6 +249,12 @@ struct drm_fb_helper {
 	int preferred_bpp;
 };
 
+static inline struct drm_fb_helper *
+drm_fb_helper_from_client(struct drm_client_dev *client)
+{
+	return container_of(client, struct drm_fb_helper, client);
+}
+
 /**
  * define DRM_FB_HELPER_DEFAULT_OPS - helper define for drm drivers
  *
@@ -307,6 +297,7 @@ void drm_fb_helper_unlink_fbi(struct drm_fb_helper *fb_helper);
 
 void drm_fb_helper_deferred_io(struct fb_info *info,
 			       struct list_head *pagelist);
+int drm_fb_helper_defio_init(struct drm_fb_helper *fb_helper);
 
 ssize_t drm_fb_helper_sys_read(struct fb_info *info, char __user *buf,
 			       size_t count, loff_t *ppos);
@@ -350,6 +341,20 @@ drm_pick_cmdline_mode(struct drm_fb_helper_connector *fb_helper_conn);
 int drm_fb_helper_add_one_connector(struct drm_fb_helper *fb_helper, struct drm_connector *connector);
 int drm_fb_helper_remove_one_connector(struct drm_fb_helper *fb_helper,
 				       struct drm_connector *connector);
+
+int drm_fb_helper_fbdev_setup(struct drm_device *dev,
+			      struct drm_fb_helper *fb_helper,
+			      const struct drm_fb_helper_funcs *funcs,
+			      unsigned int preferred_bpp,
+			      unsigned int max_conn_count);
+void drm_fb_helper_fbdev_teardown(struct drm_device *dev);
+
+void drm_fb_helper_lastclose(struct drm_device *dev);
+void drm_fb_helper_output_poll_changed(struct drm_device *dev);
+
+int drm_fb_helper_generic_probe(struct drm_fb_helper *fb_helper,
+				struct drm_fb_helper_surface_size *sizes);
+int drm_fbdev_generic_setup(struct drm_device *dev, unsigned int preferred_bpp);
 #else
 static inline void drm_fb_helper_prepare(struct drm_device *dev,
 					struct drm_fb_helper *helper,
@@ -361,11 +366,17 @@ static inline int drm_fb_helper_init(struct drm_device *dev,
 		       struct drm_fb_helper *helper,
 		       int max_conn)
 {
+	/* So drivers can use it to free the struct */
+	helper->dev = dev;
+	dev->fb_helper = helper;
+
 	return 0;
 }
 
 static inline void drm_fb_helper_fini(struct drm_fb_helper *helper)
 {
+	if (helper && helper->dev)
+		helper->dev->fb_helper = NULL;
 }
 
 static inline int drm_fb_helper_blank(int blank, struct fb_info *info)
@@ -436,6 +447,11 @@ static inline void drm_fb_helper_unlink_fbi(struct drm_fb_helper *fb_helper)
 static inline void drm_fb_helper_deferred_io(struct fb_info *info,
 					     struct list_head *pagelist)
 {
+}
+
+static inline int drm_fb_helper_defio_init(struct drm_fb_helper *fb_helper)
+{
+	return -ENODEV;
 }
 
 static inline ssize_t drm_fb_helper_sys_read(struct fb_info *info,
@@ -543,6 +559,45 @@ drm_fb_helper_add_one_connector(struct drm_fb_helper *fb_helper,
 static inline int
 drm_fb_helper_remove_one_connector(struct drm_fb_helper *fb_helper,
 				   struct drm_connector *connector)
+{
+	return 0;
+}
+
+static inline int
+drm_fb_helper_fbdev_setup(struct drm_device *dev,
+			  struct drm_fb_helper *fb_helper,
+			  const struct drm_fb_helper_funcs *funcs,
+			  unsigned int preferred_bpp,
+			  unsigned int max_conn_count)
+{
+	/* So drivers can use it to free the struct */
+	dev->fb_helper = fb_helper;
+
+	return 0;
+}
+
+static inline void drm_fb_helper_fbdev_teardown(struct drm_device *dev)
+{
+	dev->fb_helper = NULL;
+}
+
+static inline void drm_fb_helper_lastclose(struct drm_device *dev)
+{
+}
+
+static inline void drm_fb_helper_output_poll_changed(struct drm_device *dev)
+{
+}
+
+static inline int
+drm_fb_helper_generic_probe(struct drm_fb_helper *fb_helper,
+			    struct drm_fb_helper_surface_size *sizes)
+{
+	return 0;
+}
+
+static inline int
+drm_fbdev_generic_setup(struct drm_device *dev, unsigned int preferred_bpp)
 {
 	return 0;
 }

@@ -43,8 +43,8 @@ static int link_quirk;
 module_param(link_quirk, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(link_quirk, "Don't clear the chain bit on a link TRB");
 
-static unsigned int quirks;
-module_param(quirks, uint, S_IRUGO);
+static unsigned long long quirks;
+module_param(quirks, ullong, S_IRUGO);
 MODULE_PARM_DESC(quirks, "Bit flags for quirks to be enabled as default");
 
 static bool td_on_ring(struct xhci_td *td, struct xhci_ring *ring)
@@ -234,6 +234,68 @@ int xhci_reset(struct xhci_hcd *xhci)
 	return ret;
 }
 
+static void xhci_zero_64b_regs(struct xhci_hcd *xhci)
+{
+	struct device *dev = xhci_to_hcd(xhci)->self.sysdev;
+	int err, i;
+	u64 val;
+
+	/*
+	 * Some Renesas controllers get into a weird state if they are
+	 * reset while programmed with 64bit addresses (they will preserve
+	 * the top half of the address in internal, non visible
+	 * registers). You end up with half the address coming from the
+	 * kernel, and the other half coming from the firmware. Also,
+	 * changing the programming leads to extra accesses even if the
+	 * controller is supposed to be halted. The controller ends up with
+	 * a fatal fault, and is then ripe for being properly reset.
+	 *
+	 * Special care is taken to only apply this if the device is behind
+	 * an iommu. Doing anything when there is no iommu is definitely
+	 * unsafe...
+	 */
+	if (!(xhci->quirks & XHCI_ZERO_64B_REGS) || !dev->iommu_group)
+		return;
+
+	xhci_info(xhci, "Zeroing 64bit base registers, expecting fault\n");
+
+	/* Clear HSEIE so that faults do not get signaled */
+	val = readl(&xhci->op_regs->command);
+	val &= ~CMD_HSEIE;
+	writel(val, &xhci->op_regs->command);
+
+	/* Clear HSE (aka FATAL) */
+	val = readl(&xhci->op_regs->status);
+	val |= STS_FATAL;
+	writel(val, &xhci->op_regs->status);
+
+	/* Now zero the registers, and brace for impact */
+	val = xhci_read_64(xhci, &xhci->op_regs->dcbaa_ptr);
+	if (upper_32_bits(val))
+		xhci_write_64(xhci, 0, &xhci->op_regs->dcbaa_ptr);
+	val = xhci_read_64(xhci, &xhci->op_regs->cmd_ring);
+	if (upper_32_bits(val))
+		xhci_write_64(xhci, 0, &xhci->op_regs->cmd_ring);
+
+	for (i = 0; i < HCS_MAX_INTRS(xhci->hcs_params1); i++) {
+		struct xhci_intr_reg __iomem *ir;
+
+		ir = &xhci->run_regs->ir_set[i];
+		val = xhci_read_64(xhci, &ir->erst_base);
+		if (upper_32_bits(val))
+			xhci_write_64(xhci, 0, &ir->erst_base);
+		val= xhci_read_64(xhci, &ir->erst_dequeue);
+		if (upper_32_bits(val))
+			xhci_write_64(xhci, 0, &ir->erst_dequeue);
+	}
+
+	/* Wait for the fault to appear. It will be cleared on reset */
+	err = xhci_handshake(&xhci->op_regs->status,
+			     STS_FATAL, STS_FATAL,
+			     XHCI_MAX_HALT_USEC);
+	if (!err)
+		xhci_info(xhci, "Fault detected\n");
+}
 
 #ifdef CONFIG_USB_PCI
 /*
@@ -916,6 +978,7 @@ int xhci_suspend(struct xhci_hcd *xhci, bool do_wakeup)
 	unsigned int		delay = XHCI_MAX_HALT_USEC;
 	struct usb_hcd		*hcd = xhci_to_hcd(xhci);
 	u32			command;
+	u32			res;
 
 	if (!hcd->state)
 		return 0;
@@ -967,11 +1030,28 @@ int xhci_suspend(struct xhci_hcd *xhci, bool do_wakeup)
 	command = readl(&xhci->op_regs->command);
 	command |= CMD_CSS;
 	writel(command, &xhci->op_regs->command);
+	xhci->broken_suspend = 0;
 	if (xhci_handshake(&xhci->op_regs->status,
 				STS_SAVE, 0, 10 * 1000)) {
-		xhci_warn(xhci, "WARN: xHC save state timeout\n");
-		spin_unlock_irq(&xhci->lock);
-		return -ETIMEDOUT;
+	/*
+	 * AMD SNPS xHC 3.0 occasionally does not clear the
+	 * SSS bit of USBSTS and when driver tries to poll
+	 * to see if the xHC clears BIT(8) which never happens
+	 * and driver assumes that controller is not responding
+	 * and times out. To workaround this, its good to check
+	 * if SRE and HCE bits are not set (as per xhci
+	 * Section 5.4.2) and bypass the timeout.
+	 */
+		res = readl(&xhci->op_regs->status);
+		if ((xhci->quirks & XHCI_SNPS_BROKEN_SUSPEND) &&
+		    (((res & STS_SRE) == 0) &&
+				((res & STS_HCE) == 0))) {
+			xhci->broken_suspend = 1;
+		} else {
+			xhci_warn(xhci, "WARN: xHC save state timeout\n");
+			spin_unlock_irq(&xhci->lock);
+			return -ETIMEDOUT;
+		}
 	}
 	spin_unlock_irq(&xhci->lock);
 
@@ -1024,7 +1104,7 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 	set_bit(HCD_FLAG_HW_ACCESSIBLE, &xhci->shared_hcd->flags);
 
 	spin_lock_irq(&xhci->lock);
-	if (xhci->quirks & XHCI_RESET_ON_RESUME)
+	if ((xhci->quirks & XHCI_RESET_ON_RESUME) || xhci->broken_suspend)
 		hibernated = true;
 
 	if (!hibernated) {
@@ -1067,6 +1147,7 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 
 		xhci_dbg(xhci, "Stop HCD\n");
 		xhci_halt(xhci);
+		xhci_zero_64b_regs(xhci);
 		xhci_reset(xhci);
 		spin_unlock_irq(&xhci->lock);
 		xhci_cleanup_msix(xhci);
@@ -4361,6 +4442,14 @@ static u16 xhci_calculate_u1_timeout(struct xhci_hcd *xhci,
 {
 	unsigned long long timeout_ns;
 
+	/* Prevent U1 if service interval is shorter than U1 exit latency */
+	if (usb_endpoint_xfer_int(desc) || usb_endpoint_xfer_isoc(desc)) {
+		if (xhci_service_interval_to_ns(desc) <= udev->u1_params.mel) {
+			dev_dbg(&udev->dev, "Disable U1, ESIT shorter than exit latency\n");
+			return USB3_LPM_DISABLED;
+		}
+	}
+
 	if (xhci->quirks & XHCI_INTEL_HOST)
 		timeout_ns = xhci_calculate_intel_u1_timeout(udev, desc);
 	else
@@ -4416,6 +4505,14 @@ static u16 xhci_calculate_u2_timeout(struct xhci_hcd *xhci,
 		struct usb_endpoint_descriptor *desc)
 {
 	unsigned long long timeout_ns;
+
+	/* Prevent U2 if service interval is shorter than U2 exit latency */
+	if (usb_endpoint_xfer_int(desc) || usb_endpoint_xfer_isoc(desc)) {
+		if (xhci_service_interval_to_ns(desc) <= udev->u2_params.mel) {
+			dev_dbg(&udev->dev, "Disable U2, ESIT shorter than exit latency\n");
+			return USB3_LPM_DISABLED;
+		}
+	}
 
 	if (xhci->quirks & XHCI_INTEL_HOST)
 		timeout_ns = xhci_calculate_intel_u2_timeout(udev, desc);
@@ -4904,6 +5001,8 @@ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks)
 	if (retval)
 		return retval;
 
+	xhci_zero_64b_regs(xhci);
+
 	xhci_dbg(xhci, "Resetting HCD\n");
 	/* Reset the internal HC memory state and registers. */
 	retval = xhci_reset(xhci);
@@ -4946,7 +5045,7 @@ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks)
 		return retval;
 	xhci_dbg(xhci, "Called HCD init\n");
 
-	xhci_info(xhci, "hcc params 0x%08x hci version 0x%x quirks 0x%08x\n",
+	xhci_info(xhci, "hcc params 0x%08x hci version 0x%x quirks 0x%016llx\n",
 		  xhci->hcc_params, xhci->hci_version, xhci->quirks);
 
 	return 0;

@@ -505,29 +505,7 @@ static int check_online_cpus(void)
 	return 0;
 }
 
-static atomic_t late_cpus_in;
-static atomic_t late_cpus_out;
-
-static int __wait_for_cpus(atomic_t *t, long long timeout)
-{
-	int all_cpus = num_online_cpus();
-
-	atomic_inc(t);
-
-	while (atomic_read(t) < all_cpus) {
-		if (timeout < SPINUNIT) {
-			pr_err("Timeout while waiting for CPUs rendezvous, remaining: %d\n",
-				all_cpus - atomic_read(t));
-			return 1;
-		}
-
-		ndelay(SPINUNIT);
-		timeout -= SPINUNIT;
-
-		touch_nmi_watchdog();
-	}
-	return 0;
-}
+static atomic_t late_cpus;
 
 /*
  * Returns:
@@ -537,37 +515,46 @@ static int __wait_for_cpus(atomic_t *t, long long timeout)
  */
 static int __reload_late(void *info)
 {
+	unsigned int timeout = NSEC_PER_SEC;
+	int all_cpus = num_online_cpus();
 	int cpu = smp_processor_id();
 	enum ucode_state err;
 	int ret = 0;
+
+	atomic_dec(&late_cpus);
 
 	/*
 	 * Wait for all CPUs to arrive. A load will not be attempted unless all
 	 * CPUs show up.
 	 * */
-	if (__wait_for_cpus(&late_cpus_in, NSEC_PER_SEC))
-		return -1;
+	while (atomic_read(&late_cpus)) {
+		if (timeout < SPINUNIT) {
+			pr_err("Timeout while waiting for CPUs rendezvous, remaining: %d\n",
+				atomic_read(&late_cpus));
+			return -1;
+		}
+
+		ndelay(SPINUNIT);
+		timeout -= SPINUNIT;
+
+		touch_nmi_watchdog();
+	}
 
 	raw_spin_lock(&update_lock);
 	apply_microcode_local(&err);
 	raw_spin_unlock(&update_lock);
 
-	/* siblings return UCODE_OK because their engine got updated already */
 	if (err > UCODE_NFOUND) {
 		pr_warn("Error reloading microcode on CPU %d\n", cpu);
 		ret = -1;
-	} else if (err == UCODE_UPDATED || err == UCODE_OK) {
+	} else if (err == UCODE_UPDATED) {
 		ret = 1;
 	}
 
-	/*
-	 * Increase the wait timeout to a safe value here since we're
-	 * serializing the microcode update and that could take a while on a
-	 * large number of CPUs. And that is fine as the *actual* timeout will
-	 * be determined by the last CPU finished updating and thus cut short.
-	 */
-	if (__wait_for_cpus(&late_cpus_out, NSEC_PER_SEC * num_online_cpus()))
-		panic("Timeout during microcode update!\n");
+	atomic_inc(&late_cpus);
+
+	while (atomic_read(&late_cpus) != all_cpus)
+		cpu_relax();
 
 	return ret;
 }
@@ -580,11 +567,12 @@ static int microcode_reload_late(void)
 {
 	int ret;
 
-	atomic_set(&late_cpus_in,  0);
-	atomic_set(&late_cpus_out, 0);
+	atomic_set(&late_cpus, num_online_cpus());
 
 	ret = stop_machine_cpuslocked(__reload_late, NULL, cpu_online_mask);
-	if (ret > 0)
+	if (ret < 0)
+		return ret;
+	else if (ret > 0)
 		microcode_check();
 
 	return ret;

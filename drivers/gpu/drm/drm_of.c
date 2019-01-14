@@ -15,15 +15,15 @@ static void drm_release_of(struct device *dev, void *data)
 }
 
 /**
- * drm_crtc_port_mask - find the mask of a registered CRTC by port OF node
+ * drm_of_crtc_port_mask - find the mask of a registered CRTC by port OF node
  * @dev: DRM device
  * @port: port OF node
  *
  * Given a port OF node, return the possible mask of the corresponding
  * CRTC within a device's list of CRTCs.  Returns zero if not found.
  */
-static uint32_t drm_crtc_port_mask(struct drm_device *dev,
-				   struct device_node *port)
+uint32_t drm_of_crtc_port_mask(struct drm_device *dev,
+			    struct device_node *port)
 {
 	unsigned int index = 0;
 	struct drm_crtc *tmp;
@@ -37,6 +37,7 @@ static uint32_t drm_crtc_port_mask(struct drm_device *dev,
 
 	return 0;
 }
+EXPORT_SYMBOL(drm_of_crtc_port_mask);
 
 /**
  * drm_of_find_possible_crtcs - find the possible CRTCs for an encoder port
@@ -62,7 +63,7 @@ uint32_t drm_of_find_possible_crtcs(struct drm_device *dev,
 			return 0;
 		}
 
-		possible_crtcs |= drm_crtc_port_mask(dev, remote_port);
+		possible_crtcs |= drm_of_crtc_port_mask(dev, remote_port);
 
 		of_node_put(remote_port);
 	}
@@ -122,12 +123,10 @@ int drm_of_component_probe(struct device *dev,
 		if (!port)
 			break;
 
-		if (!of_device_is_available(port->parent)) {
-			of_node_put(port);
-			continue;
-		}
+		if (of_device_is_available(port->parent))
+			drm_of_component_match_add(dev, &match, compare_of,
+						   port);
 
-		drm_of_component_match_add(dev, &match, compare_of, port);
 		of_node_put(port);
 	}
 
@@ -160,8 +159,8 @@ int drm_of_component_probe(struct device *dev,
 				of_node_put(remote);
 				continue;
 			} else if (!of_device_is_available(remote->parent)) {
-				dev_warn(dev, "parent device of %s is not available\n",
-					 remote->full_name);
+				dev_warn(dev, "parent device of %pOF is not available\n",
+					 remote);
 				of_node_put(remote);
 				continue;
 			}
@@ -233,15 +232,24 @@ int drm_of_find_panel_or_bridge(const struct device_node *np,
 
 	if (!panel && !bridge)
 		return -EINVAL;
+	if (panel)
+		*panel = NULL;
 
 	remote = of_graph_get_remote_node(np, port, endpoint);
 	if (!remote)
 		return -ENODEV;
 
+	if (!of_device_is_available(remote)) {
+		of_node_put(remote);
+		return -ENODEV;
+	}
+
 	if (panel) {
 		*panel = of_drm_find_panel(remote);
-		if (*panel)
+		if (!IS_ERR(*panel))
 			ret = 0;
+		else
+			*panel = NULL;
 	}
 
 	/* No panel found yet, check for a bridge next. */

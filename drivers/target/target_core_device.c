@@ -806,6 +806,7 @@ struct se_device *target_alloc_device(struct se_hba *hba, const char *name)
 	dev->dev_attrib.emulate_tpws = DA_EMULATE_TPWS;
 	dev->dev_attrib.emulate_caw = DA_EMULATE_CAW;
 	dev->dev_attrib.emulate_3pc = DA_EMULATE_3PC;
+	dev->dev_attrib.emulate_pr = DA_EMULATE_PR;
 	dev->dev_attrib.pi_prot_type = TARGET_DIF_TYPE0_PROT;
 	dev->dev_attrib.enforce_pr_isids = DA_ENFORCE_PR_ISIDS;
 	dev->dev_attrib.force_pr_aptpl = DA_FORCE_PR_APTPL;
@@ -919,7 +920,7 @@ static int target_devices_idr_iter(int id, void *p, void *data)
 	 * to allow other callers to access partially setup devices,
 	 * so we skip them here.
 	 */
-	if (!(dev->dev_flags & DF_CONFIGURED))
+	if (!target_dev_configured(dev))
 		return 0;
 
 	return iter->fn(dev, iter->data);
@@ -953,7 +954,7 @@ int target_configure_device(struct se_device *dev)
 	struct se_hba *hba = dev->se_hba;
 	int ret, id;
 
-	if (dev->dev_flags & DF_CONFIGURED) {
+	if (target_dev_configured(dev)) {
 		pr_err("se_dev->se_dev_ptr already set for storage"
 				" object\n");
 		return -EEXIST;
@@ -1056,7 +1057,7 @@ void target_free_device(struct se_device *dev)
 
 	WARN_ON(!list_empty(&dev->dev_sep_list));
 
-	if (dev->dev_flags & DF_CONFIGURED) {
+	if (target_dev_configured(dev)) {
 		destroy_workqueue(dev->tmr_wq);
 
 		dev->transport->destroy_device(dev);
@@ -1167,6 +1168,18 @@ passthrough_parse_cdb(struct se_cmd *cmd,
 	if (cdb[0] == REPORT_LUNS) {
 		cmd->execute_cmd = spc_emulate_report_luns;
 		return TCM_NO_SENSE;
+	}
+
+	/*
+	 * With emulate_pr disabled, all reservation requests should fail,
+	 * regardless of whether or not TRANSPORT_FLAG_PASSTHROUGH_PGR is set.
+	 */
+	if (!dev->dev_attrib.emulate_pr &&
+	    ((cdb[0] == PERSISTENT_RESERVE_IN) ||
+	     (cdb[0] == PERSISTENT_RESERVE_OUT) ||
+	     (cdb[0] == RELEASE || cdb[0] == RELEASE_10) ||
+	     (cdb[0] == RESERVE || cdb[0] == RESERVE_10))) {
+		return TCM_UNSUPPORTED_SCSI_OPCODE;
 	}
 
 	/*

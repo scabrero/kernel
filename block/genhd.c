@@ -567,7 +567,8 @@ static int exact_lock(dev_t devt, void *data)
 	return 0;
 }
 
-static void register_disk(struct device *parent, struct gendisk *disk)
+static void register_disk(struct device *parent, struct gendisk *disk,
+			  const struct attribute_group **groups)
 {
 	struct device *ddev = disk_to_dev(disk);
 	struct block_device *bdev;
@@ -582,6 +583,10 @@ static void register_disk(struct device *parent, struct gendisk *disk)
 	/* delay uevents, until we scanned partition table */
 	dev_set_uevent_suppress(ddev, 1);
 
+	if (groups) {
+		WARN_ON(ddev->groups);
+		ddev->groups = groups;
+	}
 	if (device_add(ddev))
 		return;
 	if (!sysfs_deprecated) {
@@ -647,6 +652,7 @@ exit:
  * __device_add_disk - add disk information to kernel list
  * @parent: parent device for the disk
  * @disk: per-device partitioning information
+ * @groups: Additional per-device sysfs groups
  * @register_queue: register the queue if set to true
  *
  * This function registers the partitioning information in @disk
@@ -655,6 +661,7 @@ exit:
  * FIXME: error handling
  */
 static void __device_add_disk(struct device *parent, struct gendisk *disk,
+			      const struct attribute_group **groups,
 			      bool register_queue)
 {
 	dev_t devt;
@@ -698,7 +705,7 @@ static void __device_add_disk(struct device *parent, struct gendisk *disk,
 		blk_register_region(disk_devt(disk), disk->minors, NULL,
 				    exact_match, exact_lock, disk);
 	}
-	register_disk(parent, disk);
+	register_disk(parent, disk, groups);
 	if (register_queue)
 		blk_register_queue(disk);
 
@@ -712,15 +719,17 @@ static void __device_add_disk(struct device *parent, struct gendisk *disk,
 	blk_integrity_add(disk);
 }
 
-void device_add_disk(struct device *parent, struct gendisk *disk)
+void device_add_disk(struct device *parent, struct gendisk *disk,
+		     const struct attribute_group **groups)
+
 {
-	__device_add_disk(parent, disk, true);
+	__device_add_disk(parent, disk, groups, true);
 }
 EXPORT_SYMBOL(device_add_disk);
 
 void device_add_disk_no_queue_reg(struct device *parent, struct gendisk *disk)
 {
-	__device_add_disk(parent, disk, false);
+	__device_add_disk(parent, disk, NULL, false);
 }
 EXPORT_SYMBOL(device_add_disk_no_queue_reg);
 
@@ -1139,28 +1148,25 @@ static ssize_t disk_discard_alignment_show(struct device *dev,
 	return sprintf(buf, "%d\n", queue_discard_alignment(disk->queue));
 }
 
-static DEVICE_ATTR(range, S_IRUGO, disk_range_show, NULL);
-static DEVICE_ATTR(ext_range, S_IRUGO, disk_ext_range_show, NULL);
-static DEVICE_ATTR(removable, S_IRUGO, disk_removable_show, NULL);
-static DEVICE_ATTR(hidden, S_IRUGO, disk_hidden_show, NULL);
-static DEVICE_ATTR(ro, S_IRUGO, disk_ro_show, NULL);
-static DEVICE_ATTR(size, S_IRUGO, part_size_show, NULL);
-static DEVICE_ATTR(alignment_offset, S_IRUGO, disk_alignment_offset_show, NULL);
-static DEVICE_ATTR(discard_alignment, S_IRUGO, disk_discard_alignment_show,
-		   NULL);
-static DEVICE_ATTR(capability, S_IRUGO, disk_capability_show, NULL);
-static DEVICE_ATTR(stat, S_IRUGO, part_stat_show, NULL);
-static DEVICE_ATTR(inflight, S_IRUGO, part_inflight_show, NULL);
-static DEVICE_ATTR(badblocks, S_IRUGO | S_IWUSR, disk_badblocks_show,
-		disk_badblocks_store);
+static DEVICE_ATTR(range, 0444, disk_range_show, NULL);
+static DEVICE_ATTR(ext_range, 0444, disk_ext_range_show, NULL);
+static DEVICE_ATTR(removable, 0444, disk_removable_show, NULL);
+static DEVICE_ATTR(hidden, 0444, disk_hidden_show, NULL);
+static DEVICE_ATTR(ro, 0444, disk_ro_show, NULL);
+static DEVICE_ATTR(size, 0444, part_size_show, NULL);
+static DEVICE_ATTR(alignment_offset, 0444, disk_alignment_offset_show, NULL);
+static DEVICE_ATTR(discard_alignment, 0444, disk_discard_alignment_show, NULL);
+static DEVICE_ATTR(capability, 0444, disk_capability_show, NULL);
+static DEVICE_ATTR(stat, 0444, part_stat_show, NULL);
+static DEVICE_ATTR(inflight, 0444, part_inflight_show, NULL);
+static DEVICE_ATTR(badblocks, 0644, disk_badblocks_show, disk_badblocks_store);
 #ifdef CONFIG_FAIL_MAKE_REQUEST
 static struct device_attribute dev_attr_fail =
-	__ATTR(make-it-fail, S_IRUGO|S_IWUSR, part_fail_show, part_fail_store);
+	__ATTR(make-it-fail, 0644, part_fail_show, part_fail_store);
 #endif
 #ifdef CONFIG_FAIL_IO_TIMEOUT
 static struct device_attribute dev_attr_fail_timeout =
-	__ATTR(io-timeout-fail,  S_IRUGO|S_IWUSR, part_timeout_show,
-		part_timeout_store);
+	__ATTR(io-timeout-fail, 0644, part_timeout_show, part_timeout_store);
 #endif
 
 static struct attribute *disk_attrs[] = {
@@ -1930,9 +1936,9 @@ static ssize_t disk_events_poll_msecs_store(struct device *dev,
 	return count;
 }
 
-static const DEVICE_ATTR(events, S_IRUGO, disk_events_show, NULL);
-static const DEVICE_ATTR(events_async, S_IRUGO, disk_events_async_show, NULL);
-static const DEVICE_ATTR(events_poll_msecs, S_IRUGO|S_IWUSR,
+static const DEVICE_ATTR(events, 0444, disk_events_show, NULL);
+static const DEVICE_ATTR(events_async, 0444, disk_events_async_show, NULL);
+static const DEVICE_ATTR(events_poll_msecs, 0644,
 			 disk_events_poll_msecs_show,
 			 disk_events_poll_msecs_store);
 

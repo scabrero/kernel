@@ -33,12 +33,6 @@ enum {
 	NVDIMM_IO_ATOMIC = 1,
 };
 
-struct nd_poison {
-	u64 start;
-	u64 length;
-	struct list_head list;
-};
-
 struct nvdimm_drvdata {
 	struct device *dev;
 	int nsindex_size, nslabel_size;
@@ -133,6 +127,7 @@ struct nd_mapping {
 	struct nvdimm *nvdimm;
 	u64 start;
 	u64 size;
+	int position;
 	struct list_head labels;
 	struct mutex lock;
 	/*
@@ -255,6 +250,14 @@ long nvdimm_clear_poison(struct device *dev, phys_addr_t phys,
 void nvdimm_set_aliasing(struct device *dev);
 void nvdimm_set_locked(struct device *dev);
 void nvdimm_clear_locked(struct device *dev);
+#if IS_ENABLED(CONFIG_NVDIMM_KEYS)
+int nvdimm_security_unlock(struct device *dev);
+#else
+static inline int nvdimm_security_unlock(struct device *dev)
+{
+	return 0;
+}
+#endif
 struct nd_btt *to_nd_btt(struct device *dev);
 
 struct nd_gen_sb {
@@ -364,6 +367,7 @@ struct resource *nvdimm_allocate_dpa(struct nvdimm_drvdata *ndd,
 		struct nd_label_id *label_id, resource_size_t start,
 		resource_size_t n);
 resource_size_t nvdimm_namespace_capacity(struct nd_namespace_common *ndns);
+bool nvdimm_namespace_locked(struct nd_namespace_common *ndns);
 struct nd_namespace_common *nvdimm_namespace_common_probe(struct device *dev);
 int nvdimm_namespace_attach_btt(struct nd_namespace_common *ndns);
 int nvdimm_namespace_detach_btt(struct nd_btt *nd_btt);

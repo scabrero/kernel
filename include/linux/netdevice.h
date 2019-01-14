@@ -58,6 +58,7 @@ struct device;
 struct phy_device;
 struct dsa_switch_tree;
 
+struct sfp_bus;
 /* 802.11 specific */
 struct wireless_dev;
 /* 802.15.4 specific */
@@ -534,6 +535,32 @@ static inline void napi_synchronize(const struct napi_struct *n)
 		barrier();
 }
 
+/**
+ *	napi_if_scheduled_mark_missed - if napi is running, set the
+ *	NAPIF_STATE_MISSED
+ *	@n: NAPI context
+ *
+ * If napi is running, set the NAPIF_STATE_MISSED, and return true if
+ * NAPI is scheduled.
+ **/
+static inline bool napi_if_scheduled_mark_missed(struct napi_struct *n)
+{
+	unsigned long val, new;
+
+	do {
+		val = READ_ONCE(n->state);
+		if (val & NAPIF_STATE_DISABLE)
+			return true;
+
+		if (!(val & NAPIF_STATE_SCHED))
+			return false;
+
+		new = val | NAPIF_STATE_MISSED;
+	} while (cmpxchg(&n->state, val, new) != val);
+
+	return true;
+}
+
 enum netdev_queue_state_t {
 	__QUEUE_STATE_DRV_XOFF,
 	__QUEUE_STATE_STACK_XOFF,
@@ -582,6 +609,9 @@ struct netdev_queue {
 
 	/* Subordinate device that the queue has been assigned to */
 	struct net_device	*sb_dev;
+#ifdef CONFIG_XDP_SOCKETS
+	struct xdp_umem         *umem;
+#endif
 /*
  * write-mostly part
  */
@@ -702,6 +732,9 @@ struct netdev_rx_queue {
 	struct kobject			kobj;
 	struct net_device		*dev;
 	struct xdp_rxq_info		xdp_rxq;
+#ifdef CONFIG_XDP_SOCKETS
+	struct xdp_umem                 *umem;
+#endif
 } ____cacheline_aligned_in_smp;
 
 /*
@@ -1705,6 +1738,7 @@ enum netdev_priv_flags {
  *	@priomap:	XXX: need comments on this one
  *	@phydev:	Physical device may attach itself
  *			for hardware timestamping
+ *	@sfp_bus:	attached &struct sfp_bus structure.
  *
  *	@qdisc_tx_busylock: lockdep class annotating Qdisc->busylock spinlock
  *	@qdisc_running_key: lockdep class annotating Qdisc->running seqcount
@@ -1951,7 +1985,6 @@ struct net_device {
 		struct pcpu_lstats __percpu		*lstats;
 		struct pcpu_sw_netstats __percpu	*tstats;
 		struct pcpu_dstats __percpu		*dstats;
-		struct pcpu_vstats __percpu		*vstats;
 	};
 
 #if IS_ENABLED(CONFIG_GARP)
@@ -1987,6 +2020,7 @@ struct net_device {
 	struct netprio_map __rcu *priomap;
 #endif
 	struct phy_device	*phydev;
+	struct sfp_bus		*sfp_bus;
 	struct lock_class_key	*qdisc_tx_busylock;
 	struct lock_class_key	*qdisc_running_key;
 	bool			proto_down;
@@ -2330,6 +2364,12 @@ struct pcpu_sw_netstats {
 	u64     tx_packets;
 	u64     tx_bytes;
 	struct u64_stats_sync   syncp;
+};
+
+struct pcpu_lstats {
+	u64 packets;
+	u64 bytes;
+	struct u64_stats_sync syncp;
 };
 
 #define __netdev_alloc_pcpu_stats(type, gfp)				\
@@ -3110,6 +3150,26 @@ static inline void netdev_tx_sent_queue(struct netdev_queue *dev_queue,
 	if (unlikely(dql_avail(&dev_queue->dql) >= 0))
 		clear_bit(__QUEUE_STATE_STACK_XOFF, &dev_queue->state);
 #endif
+}
+
+/* Variant of netdev_tx_sent_queue() for drivers that are aware
+ * that they should not test BQL status themselves.
+ * We do want to change __QUEUE_STATE_STACK_XOFF only for the last
+ * skb of a batch.
+ * Returns true if the doorbell must be used to kick the NIC.
+ */
+static inline bool __netdev_tx_sent_queue(struct netdev_queue *dev_queue,
+					  unsigned int bytes,
+					  bool xmit_more)
+{
+	if (xmit_more) {
+#ifdef CONFIG_BQL
+		dql_queued(&dev_queue->dql, bytes);
+#endif
+		return netif_tx_queue_stopped(dev_queue);
+	}
+	netdev_tx_sent_queue(dev_queue, bytes);
+	return true;
 }
 
 /**

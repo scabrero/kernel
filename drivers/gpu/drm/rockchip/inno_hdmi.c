@@ -282,6 +282,7 @@ static int inno_hdmi_config_video_vsi(struct inno_hdmi *hdmi,
 	int rc;
 
 	rc = drm_hdmi_vendor_infoframe_from_display_mode(&frame.vendor.hdmi,
+							 &hdmi->connector,
 							 mode);
 
 	return inno_hdmi_upload_frame(hdmi, rc, &frame, INFOFRAME_VSI,
@@ -564,7 +565,7 @@ static int inno_hdmi_connector_get_modes(struct drm_connector *connector)
 	if (edid) {
 		hdmi->hdmi_data.sink_is_hdmi = drm_detect_hdmi_monitor(edid);
 		hdmi->hdmi_data.sink_has_audio = drm_detect_monitor_audio(edid);
-		drm_mode_connector_update_edid_property(connector, edid);
+		drm_connector_update_edid_property(connector, edid);
 		ret = drm_add_edid_modes(connector, edid);
 		kfree(edid);
 	}
@@ -593,7 +594,6 @@ static void inno_hdmi_connector_destroy(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs inno_hdmi_connector_funcs = {
-	.dpms = drm_atomic_helper_connector_dpms,
 	.fill_modes = inno_hdmi_probe_single_connector_modes,
 	.detect = inno_hdmi_connector_detect,
 	.destroy = inno_hdmi_connector_destroy,
@@ -634,7 +634,7 @@ static int inno_hdmi_register(struct drm_device *drm, struct inno_hdmi *hdmi)
 	drm_connector_init(drm, &hdmi->connector, &inno_hdmi_connector_funcs,
 			   DRM_MODE_CONNECTOR_HDMIA);
 
-	drm_mode_connector_attach_encoder(&hdmi->connector, encoder);
+	drm_connector_attach_encoder(&hdmi->connector, encoder);
 
 	return 0;
 }
@@ -831,9 +831,6 @@ static int inno_hdmi_bind(struct device *dev, struct device *master,
 	hdmi->drm_dev = drm;
 
 	iores = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!iores)
-		return -ENXIO;
-
 	hdmi->regs = devm_ioremap_resource(dev, iores);
 	if (IS_ERR(hdmi->regs))
 		return PTR_ERR(hdmi->regs);

@@ -1497,6 +1497,11 @@ static int hdac_hdmi_parse_and_map_nid(struct hdac_ext_device *edev,
 	return hdac_hdmi_init_dai_map(edev);
 }
 
+static int hdac_hdmi_pin2port(void *aptr, int pin)
+{
+	return pin - 4; /* map NID 0x05 -> port #1 */
+}
+
 static void hdac_hdmi_eld_notify_cb(void *aptr, int port, int pipe)
 {
 	struct hdac_ext_device *edev = aptr;
@@ -1550,7 +1555,8 @@ static void hdac_hdmi_eld_notify_cb(void *aptr, int port, int pipe)
 
 }
 
-static struct i915_audio_component_audio_ops aops = {
+static struct drm_audio_component_audio_ops aops = {
+	.pin2port	= hdac_hdmi_pin2port,
 	.pin_eld_notify	= hdac_hdmi_eld_notify_cb,
 };
 
@@ -1779,7 +1785,7 @@ static int hdmi_codec_probe(struct snd_soc_codec *codec)
 		return ret;
 
 	aops.audio_ptr = edev;
-	ret = snd_hdac_i915_register_notifier(&aops);
+	ret = snd_hdac_acomp_register_notifier(edev->hdac.bus, &aops);
 	if (ret < 0) {
 		dev_err(&edev->hdac.dev, "notifier register failed: err: %d\n",
 				ret);
@@ -1967,7 +1973,7 @@ static int hdac_hdmi_dev_probe(struct hdac_ext_device *edev)
 	 * Turned off in the runtime_suspend during the first explicit
 	 * pm_runtime_suspend call.
 	 */
-	ret = snd_hdac_display_power(edev->hdac.bus, true);
+	ret = snd_hdac_display_power(edev->hdac.bus, edev->hdac.addr, true);
 	if (ret < 0) {
 		dev_err(&edev->hdac.dev,
 			"Cannot turn on display power on i915 err: %d\n",
@@ -2057,7 +2063,7 @@ static int hdac_hdmi_runtime_suspend(struct device *dev)
 	 */
 	snd_hdac_codec_read(hdac, hdac->afg, 0,	AC_VERB_SET_POWER_STATE,
 							AC_PWRST_D3);
-	err = snd_hdac_display_power(bus, false);
+	err = snd_hdac_display_power(bus, edev->hdac.addr, false);
 	if (err < 0) {
 		dev_err(bus->dev, "Cannot turn on display power on i915\n");
 		return err;
@@ -2097,7 +2103,7 @@ static int hdac_hdmi_runtime_resume(struct device *dev)
 
 	snd_hdac_ext_bus_link_get(ebus, hlink);
 
-	err = snd_hdac_display_power(bus, true);
+	err = snd_hdac_display_power(bus, edev->hdac.addr, true);
 	if (err < 0) {
 		dev_err(bus->dev, "Cannot turn on display power on i915\n");
 		return err;

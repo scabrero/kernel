@@ -38,11 +38,11 @@
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 #include <linux/vga_switcheroo.h>
+#include <linux/compat.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_fb_helper.h>
 
-#include "drm_crtc_helper.h"
-#include "radeon_kfd.h"
+#include <drm/drm_crtc_helper.h>
 
 /*
  * KMS wrapper.
@@ -150,8 +150,6 @@ void radeon_gem_prime_unpin(struct drm_gem_object *obj);
 struct reservation_object *radeon_gem_prime_res_obj(struct drm_gem_object *);
 void *radeon_gem_prime_vmap(struct drm_gem_object *obj);
 void radeon_gem_prime_vunmap(struct drm_gem_object *obj, void *vaddr);
-extern long radeon_kms_compat_ioctl(struct file *filp, unsigned int cmd,
-				    unsigned long arg);
 
 /* atpx handler */
 #if defined(CONFIG_VGA_SWITCHEROO)
@@ -170,7 +168,12 @@ int radeon_no_wb;
 int radeon_modeset = -1;
 int radeon_dynclks = -1;
 int radeon_r4xx_atom = 0;
+#ifdef __powerpc__
+/* Default to PCI on PowerPC (fdo #95017) */
+int radeon_agpmode = -1;
+#else
 int radeon_agpmode = 0;
+#endif
 int radeon_vram_limit = 0;
 int radeon_gart_size = -1; /* auto */
 int radeon_benchmarking = 0;
@@ -295,6 +298,14 @@ module_param_named(uvd, radeon_uvd, int, 0444);
 MODULE_PARM_DESC(vce, "vce enable/disable vce support (1 = enable, 0 = disable)");
 module_param_named(vce, radeon_vce, int, 0444);
 
+int radeon_si_support = 1;
+MODULE_PARM_DESC(si_support, "SI support (1 = enabled (default), 0 = disabled)");
+module_param_named(si_support, radeon_si_support, int, 0444);
+
+int radeon_cik_support = 1;
+MODULE_PARM_DESC(cik_support, "CIK support (1 = enabled (default), 0 = disabled)");
+module_param_named(cik_support, radeon_cik_support, int, 0444);
+
 static struct pci_device_id pciidlist[] = {
 	radeon_PCI_IDS
 };
@@ -330,14 +341,6 @@ static int radeon_pci_probe(struct pci_dev *pdev,
 			    const struct pci_device_id *ent)
 {
 	int ret;
-
-	/*
-	 * Initialize amdkfd before starting radeon. If it was not loaded yet,
-	 * defer radeon probing
-	 */
-	ret = radeon_kfd_init();
-	if (ret == -EPROBE_DEFER)
-		return ret;
 
 	if (vga_switcheroo_client_probe_defer(pdev))
 		return -EPROBE_DEFER;
@@ -417,7 +420,6 @@ static int radeon_pmops_runtime_suspend(struct device *dev)
 
 	drm_dev->switch_power_state = DRM_SWITCH_POWER_CHANGING;
 	drm_kms_helper_poll_disable(drm_dev);
-	vga_switcheroo_set_dynamic_switch(pdev, VGA_SWITCHEROO_OFF);
 
 	ret = radeon_suspend_kms(drm_dev, false, false, false);
 	pci_save_state(pdev);
@@ -454,7 +456,6 @@ static int radeon_pmops_runtime_resume(struct device *dev)
 
 	ret = radeon_resume_kms(drm_dev, false, false);
 	drm_kms_helper_poll_enable(drm_dev);
-	vga_switcheroo_set_dynamic_switch(pdev, VGA_SWITCHEROO_ON);
 	drm_dev->switch_power_state = DRM_SWITCH_POWER_ON;
 	return 0;
 }
@@ -500,6 +501,21 @@ long radeon_drm_ioctl(struct file *filp,
 	pm_runtime_put_autosuspend(dev->dev);
 	return ret;
 }
+
+#ifdef CONFIG_COMPAT
+static long radeon_kms_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	unsigned int nr = DRM_IOCTL_NR(cmd);
+	int ret;
+
+	if (nr < DRM_COMMAND_BASE)
+		return drm_compat_ioctl(filp, cmd, arg);
+
+	ret = radeon_drm_ioctl(filp, cmd, arg);
+
+	return ret;
+}
+#endif
 
 static const struct dev_pm_ops radeon_pm_ops = {
 	.suspend = radeon_pmops_suspend,
@@ -561,7 +577,6 @@ static struct drm_driver kms_driver = {
 	.gem_close_object = radeon_gem_object_close,
 	.dumb_create = radeon_mode_dumb_create,
 	.dumb_map_offset = radeon_mode_dumb_mmap,
-	.dumb_destroy = drm_gem_dumb_destroy,
 	.fops = &radeon_driver_kms_fops,
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
@@ -624,7 +639,6 @@ static int __init radeon_init(void)
 
 static void __exit radeon_exit(void)
 {
-	radeon_kfd_fini();
 	pci_unregister_driver(pdriver);
 	radeon_unregister_atpx_handler();
 }

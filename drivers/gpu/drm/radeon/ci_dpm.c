@@ -22,7 +22,7 @@
  */
 
 #include <linux/firmware.h>
-#include "drmP.h"
+#include <drm/drmP.h>
 #include "radeon.h"
 #include "radeon_asic.h"
 #include "radeon_ucode.h"
@@ -184,6 +184,7 @@ static int ci_set_overdrive_target_tdp(struct radeon_device *rdev,
 				       u32 target_tdp);
 static int ci_update_uvd_dpm(struct radeon_device *rdev, bool gate);
 
+static PPSMC_Result ci_send_msg_to_smc(struct radeon_device *rdev, PPSMC_Msg msg);
 static PPSMC_Result ci_send_msg_to_smc_with_parameter(struct radeon_device *rdev,
 						      PPSMC_Msg msg, u32 parameter);
 
@@ -1656,6 +1657,27 @@ static int ci_notify_hw_of_power_source(struct radeon_device *rdev,
 	return 0;
 }
 #endif
+
+static PPSMC_Result ci_send_msg_to_smc(struct radeon_device *rdev, PPSMC_Msg msg)
+{
+	u32 tmp;
+	int i;
+
+	if (!ci_is_smc_running(rdev))
+		return PPSMC_Result_Failed;
+
+	WREG32(SMC_MESSAGE_0, msg);
+
+	for (i = 0; i < rdev->usec_timeout; i++) {
+		tmp = RREG32(SMC_RESP_0);
+		if (tmp != 0)
+			break;
+		udelay(1);
+	}
+	tmp = RREG32(SMC_RESP_0);
+
+	return (PPSMC_Result)tmp;
+}
 
 static PPSMC_Result ci_send_msg_to_smc_with_parameter(struct radeon_device *rdev,
 						      PPSMC_Msg msg, u32 parameter)
@@ -5659,19 +5681,29 @@ int ci_dpm_init(struct radeon_device *rdev)
 	u16 data_offset, size;
 	u8 frev, crev;
 	struct ci_power_info *pi;
+	enum pci_bus_speed speed_cap;
+	struct pci_dev *root = rdev->pdev->bus->self;
 	int ret;
-	u32 mask;
 
 	pi = kzalloc(sizeof(struct ci_power_info), GFP_KERNEL);
 	if (pi == NULL)
 		return -ENOMEM;
 	rdev->pm.dpm.priv = pi;
 
-	ret = drm_pcie_get_speed_cap_mask(rdev->ddev, &mask);
-	if (ret)
+	speed_cap = pcie_get_speed_cap(root);
+	if (speed_cap == PCI_SPEED_UNKNOWN) {
 		pi->sys_pcie_mask = 0;
-	else
-		pi->sys_pcie_mask = mask;
+	} else {
+		if (speed_cap == PCIE_SPEED_8_0GT)
+			pi->sys_pcie_mask = RADEON_PCIE_SPEED_25 |
+				RADEON_PCIE_SPEED_50 |
+				RADEON_PCIE_SPEED_80;
+		else if (speed_cap == PCIE_SPEED_5_0GT)
+			pi->sys_pcie_mask = RADEON_PCIE_SPEED_25 |
+				RADEON_PCIE_SPEED_50;
+		else
+			pi->sys_pcie_mask = RADEON_PCIE_SPEED_25;
+	}
 	pi->force_pcie_gen = RADEON_PCIE_GEN_INVALID;
 
 	pi->pcie_gen_performance.max = RADEON_PCIE_GEN1;

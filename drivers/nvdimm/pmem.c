@@ -29,7 +29,6 @@
 #include <linux/blk-mq.h>
 #include <linux/pfn_t.h>
 #include <linux/slab.h>
-#include <linux/pmem.h>
 #include <linux/uio.h>
 #include <linux/dax.h>
 #include <linux/nd.h>
@@ -108,22 +107,40 @@ static blk_status_t pmem_clear_poison(struct pmem_device *pmem,
 static void write_pmem(void *pmem_addr, struct page *page,
 		unsigned int off, unsigned int len)
 {
-	void *mem = kmap_atomic(page);
+	unsigned int chunk;
+	void *mem;
 
-	memcpy_flushcache(pmem_addr, mem + off, len);
-	kunmap_atomic(mem);
+	while (len) {
+		mem = kmap_atomic(page);
+		chunk = min_t(unsigned int, len, PAGE_SIZE);
+		memcpy_flushcache(pmem_addr, mem + off, chunk);
+		kunmap_atomic(mem);
+		len -= chunk;
+		off = 0;
+		page++;
+		pmem_addr += PAGE_SIZE;
+	}
 }
 
 static blk_status_t read_pmem(struct page *page, unsigned int off,
 		void *pmem_addr, unsigned int len)
 {
+	unsigned int chunk;
 	unsigned long rem;
-	void *mem = kmap_atomic(page);
+	void *mem;
 
-	rem = memcpy_mcsafe(mem + off, pmem_addr, len);
-	kunmap_atomic(mem);
-	if (rem)
-		return BLK_STS_IOERR;
+	while (len) {
+		mem = kmap_atomic(page);
+		chunk = min_t(unsigned int, len, PAGE_SIZE);
+		rem = memcpy_mcsafe(mem + off, pmem_addr, chunk);
+		kunmap_atomic(mem);
+		if (rem)
+			return BLK_STS_IOERR;
+		len -= chunk;
+		off = 0;
+		page++;
+		pmem_addr += PAGE_SIZE;
+	}
 	return BLK_STS_OK;
 }
 
@@ -172,11 +189,6 @@ static blk_status_t pmem_do_bvec(struct pmem_device *pmem, struct page *page,
 	return rc;
 }
 
-/* account for REQ_FLUSH rename, replace with REQ_PREFLUSH after v4.8-rc1 */
-#ifndef REQ_FLUSH
-#define REQ_FLUSH REQ_PREFLUSH
-#endif
-
 static blk_qc_t pmem_make_request(struct request_queue *q, struct bio *bio)
 {
 	blk_status_t rc = 0;
@@ -187,7 +199,7 @@ static blk_qc_t pmem_make_request(struct request_queue *q, struct bio *bio)
 	struct pmem_device *pmem = q->queuedata;
 	struct nd_region *nd_region = to_region(pmem);
 
-	if (bio->bi_opf & REQ_FLUSH)
+	if (bio->bi_opf & REQ_PREFLUSH)
 		nvdimm_flush(nd_region);
 
 	do_acct = nd_iostat_start(bio, &start);
@@ -216,7 +228,8 @@ static int pmem_rw_page(struct block_device *bdev, sector_t sector,
 	struct pmem_device *pmem = bdev->bd_queue->queuedata;
 	blk_status_t rc;
 
-	rc = pmem_do_bvec(pmem, page, PAGE_SIZE, 0, is_write, sector);
+	rc = pmem_do_bvec(pmem, page, hpage_nr_pages(page) * PAGE_SIZE,
+			  0, is_write, sector);
 
 	/*
 	 * The ->rw_page interface is subtle and tricky.  The core
@@ -239,8 +252,11 @@ __weak long __pmem_direct_access(struct pmem_device *pmem, pgoff_t pgoff,
 	if (unlikely(is_bad_pmem(&pmem->bb, PFN_PHYS(pgoff) / 512,
 					PFN_PHYS(nr_pages))))
 		return -EIO;
-	*kaddr = pmem->virt_addr + offset;
-	*pfn = phys_to_pfn_t(pmem->phys_addr + offset, pmem->pfn_flags);
+
+	if (kaddr)
+		*kaddr = pmem->virt_addr + offset;
+	if (pfn)
+		*pfn = phys_to_pfn_t(pmem->phys_addr + offset, pmem->pfn_flags);
 
 	/*
 	 * If badblocks are present, limit known good range to the
@@ -405,9 +421,11 @@ static int pmem_attach_disk(struct device *dev,
 		addr = devm_memremap_pages(dev, &pmem->pgmap);
 		pmem->pfn_flags |= PFN_MAP;
 		memcpy(&bb_res, &pmem->pgmap.res, sizeof(bb_res));
-	} else
+	} else {
 		addr = devm_memremap(dev, pmem->phys_addr,
 				pmem->size, ARCH_MEMREMAP_PMEM);
+		memcpy(&bb_res, &nsio->res, sizeof(bb_res));
+	}
 
 	/*
 	 * At release time the queue must be frozen before
@@ -457,7 +475,7 @@ static int pmem_attach_disk(struct device *dev,
 	gendev = disk_to_dev(disk);
 	gendev->groups = pmem_attribute_groups;
 
-	device_add_disk(dev, disk);
+	device_add_disk(dev, disk, NULL);
 	if (devm_add_action_or_reset(dev, pmem_release_disk, pmem))
 		return -ENOMEM;
 
@@ -585,17 +603,7 @@ static struct nd_device_driver nd_pmem_driver = {
 	.type = ND_DRIVER_NAMESPACE_IO | ND_DRIVER_NAMESPACE_PMEM,
 };
 
-static int __init pmem_init(void)
-{
-	return nd_driver_register(&nd_pmem_driver);
-}
-module_init(pmem_init);
-
-static void pmem_exit(void)
-{
-	driver_unregister(&nd_pmem_driver.drv);
-}
-module_exit(pmem_exit);
+module_nd_driver(nd_pmem_driver);
 
 MODULE_AUTHOR("Ross Zwisler <ross.zwisler@linux.intel.com>");
 MODULE_LICENSE("GPL v2");

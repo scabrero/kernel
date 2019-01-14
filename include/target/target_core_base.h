@@ -88,6 +88,8 @@
 #define DA_EMULATE_3PC				1
 /* No Emulation for PSCSI by default */
 #define DA_EMULATE_ALUA				0
+/* Emulate SCSI2 RESERVE/RELEASE and Persistent Reservations by default */
+#define DA_EMULATE_PR				1
 /* Enforce SCSI Initiator Port TransportID with 'ISID' for PR */
 #define DA_ENFORCE_PR_ISIDS			1
 /* Force SPC-3 PR Activate Persistence across Target Power Loss */
@@ -184,6 +186,7 @@ enum tcm_sense_reason_table {
 	TCM_UNSUPPORTED_TARGET_DESC_TYPE_CODE	= R(0x1a),
 	TCM_TOO_MANY_SEGMENT_DESCS		= R(0x1b),
 	TCM_UNSUPPORTED_SEGMENT_DESC_TYPE_CODE	= R(0x1c),
+	TCM_LUN_BUSY				= R(0x1e),
 #undef R
 };
 
@@ -666,7 +669,7 @@ struct se_dev_attrib {
 	int		emulate_tpws;
 	int		emulate_caw;
 	int		emulate_3pc;
-	int		pi_prot_format;
+	int		emulate_pr;
 	enum target_prot_type pi_prot_type;
 	enum target_prot_type hw_pi_prot_type;
 	int		pi_prot_verify;
@@ -810,6 +813,7 @@ struct se_device {
 	/* T10 SPC-2 + SPC-3 Reservations */
 	struct t10_reservation	t10_pr;
 	struct se_dev_attrib	dev_attrib;
+	struct config_group	dev_action_group;
 	struct config_group	dev_group;
 	struct config_group	dev_pr_group;
 	struct se_dev_stat_grps dev_stat_grps;

@@ -119,6 +119,29 @@ struct drm_crtc_state {
 	bool zpos_changed : 1;
 	bool color_mgmt_changed : 1;
 
+	/**
+	 * @no_vblank:
+	 *
+	 * Reflects the ability of a CRTC to send VBLANK events. This state
+	 * usually depends on the pipeline configuration, and the main usuage
+	 * is CRTCs feeding a writeback connector operating in oneshot mode.
+	 * In this case the VBLANK event is only generated when a job is queued
+	 * to the writeback connector, and we want the core to fake VBLANK
+	 * events when this part of the pipeline hasn't changed but others had
+	 * or when the CRTC and connectors are being disabled.
+	 *
+	 * __drm_atomic_helper_crtc_duplicate_state() will not reset the value
+	 * from the current state, the CRTC driver is then responsible for
+	 * updating this field when needed.
+	 *
+	 * Note that the combination of &drm_crtc_state.event == NULL and
+	 * &drm_crtc_state.no_blank == true is valid and usually used when the
+	 * writeback connector attached to the CRTC has a new job queued. In
+	 * this case the driver will send the VBLANK event on its own when the
+	 * writeback job is complete.
+	 */
+	bool no_vblank : 1;
+
 	/* attached planes bitmask:
 	 * WARNING: transitional helpers do not maintain plane_mask so
 	 * drivers not converted over to atomic helpers should not rely
@@ -134,10 +157,13 @@ struct drm_crtc_state {
 	 *
 	 * Internal display timings which can be used by the driver to handle
 	 * differences between the mode requested by userspace in @mode and what
-	 * is actually programmed into the hardware. It is purely driver
-	 * implementation defined what exactly this adjusted mode means. Usually
-	 * it is used to store the hardware display timings used between the
-	 * CRTC and encoder blocks.
+	 * is actually programmed into the hardware.
+	 *
+	 * For drivers using drm_bridge, this stores hardware display timings
+	 * used between the CRTC and the first bridge. For other drivers, the
+	 * meaning of the adjusted_mode field is purely driver implementation
+	 * defined information, and will usually be used to store the hardware
+	 * display timings used between the CRTC and encoder blocks.
 	 */
 	struct drm_display_mode adjusted_mode;
 
@@ -367,14 +393,6 @@ struct drm_crtc_funcs {
 	 * drm_crtc_enable_color_mgmt(), which then supports the legacy gamma
 	 * interface through the drm_atomic_helper_legacy_gamma_set()
 	 * compatibility implementation.
-	 *
-	 * NOTE:
-	 *
-	 * Drivers that support gamma tables and also fbdev emulation through
-	 * the provided helper library need to take care to fill out the gamma
-	 * hooks for both. Currently there's a bit an unfortunate duplication
-	 * going on, which should eventually be unified to just one set of
-	 * hooks.
 	 */
 	int (*gamma_set)(struct drm_crtc *crtc, u16 *r, u16 *g, u16 *b,
 			 uint32_t size,
@@ -511,6 +529,8 @@ struct drm_crtc_funcs {
 	 * cleaned up by calling the @atomic_destroy_state hook in this
 	 * structure.
 	 *
+	 * This callback is mandatory for atomic drivers.
+	 *
 	 * Atomic drivers which don't subclass &struct drm_crtc_state should use
 	 * drm_atomic_helper_crtc_duplicate_state(). Drivers that subclass the
 	 * state structure to extend it with driver-private state should use
@@ -537,6 +557,8 @@ struct drm_crtc_funcs {
 	 *
 	 * Destroy a state duplicated with @atomic_duplicate_state and release
 	 * or unreference all resources it references
+	 *
+	 * This callback is mandatory for atomic drivers.
 	 */
 	void (*atomic_destroy_state)(struct drm_crtc *crtc,
 				     struct drm_crtc_state *state);
@@ -814,10 +836,10 @@ struct drm_crtc {
 	 * This is protected by @mutex. Note that nonblocking atomic commits
 	 * access the current CRTC state without taking locks. Either by going
 	 * through the &struct drm_atomic_state pointers, see
-	 * for_each_crtc_in_state(), for_each_oldnew_crtc_in_state(),
-	 * for_each_old_crtc_in_state() and for_each_new_crtc_in_state(). Or
-	 * through careful ordering of atomic commit operations as implemented
-	 * in the atomic helpers, see &struct drm_crtc_commit.
+	 * for_each_oldnew_crtc_in_state(), for_each_old_crtc_in_state() and
+	 * for_each_new_crtc_in_state(). Or through careful ordering of atomic
+	 * commit operations as implemented in the atomic helpers, see
+	 * &struct drm_crtc_commit.
 	 */
 	struct drm_crtc_state *state;
 
@@ -943,8 +965,8 @@ static inline unsigned int drm_crtc_index(const struct drm_crtc *crtc)
  * drm_crtc_mask - find the mask of a registered CRTC
  * @crtc: CRTC to find mask for
  *
- * Given a registered CRTC, return the mask bit of that CRTC for an
- * encoder's possible_crtcs field.
+ * Given a registered CRTC, return the mask bit of that CRTC for the
+ * &drm_encoder.possible_crtcs and &drm_plane.possible_crtcs fields.
  */
 static inline uint32_t drm_crtc_mask(const struct drm_crtc *crtc)
 {
@@ -960,6 +982,7 @@ struct drm_crtc *drm_crtc_from_index(struct drm_device *dev, int idx);
 /**
  * drm_crtc_find - look up a CRTC object from its ID
  * @dev: DRM device
+ * @file_priv: drm file to check for lease against.
  * @id: &drm_mode_object ID
  *
  * This can be used to look up a CRTC from its userspace ID. Only used by

@@ -406,7 +406,6 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 			  || !exp_info->ops->unmap_dma_buf
 			  || !exp_info->ops->release
 			  || !exp_info->ops->map_atomic
-			  || !exp_info->ops->map
 			  || !exp_info->ops->mmap)) {
 		return ERR_PTR(-EINVAL);
 	}
@@ -872,6 +871,8 @@ void *dma_buf_kmap_atomic(struct dma_buf *dmabuf, unsigned long page_num)
 {
 	WARN_ON(!dmabuf);
 
+	if (!dmabuf->ops->map_atomic)
+		return NULL;
 	return dmabuf->ops->map_atomic(dmabuf, page_num);
 }
 EXPORT_SYMBOL_GPL(dma_buf_kmap_atomic);
@@ -907,6 +908,8 @@ void *dma_buf_kmap(struct dma_buf *dmabuf, unsigned long page_num)
 {
 	WARN_ON(!dmabuf);
 
+	if (!dmabuf->ops->map)
+		return NULL;
 	return dmabuf->ops->map(dmabuf, page_num);
 }
 EXPORT_SYMBOL_GPL(dma_buf_kmap);

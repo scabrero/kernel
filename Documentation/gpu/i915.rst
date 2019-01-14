@@ -58,6 +58,12 @@ Intel GVT-g Host Support(vGPU device model)
 .. kernel-doc:: drivers/gpu/drm/i915/intel_gvt.c
    :internal:
 
+Workarounds
+-----------
+
+.. kernel-doc:: drivers/gpu/drm/i915/intel_workarounds.c
+   :doc: Hardware workarounds
+
 Display Hardware Handling
 =========================
 
@@ -335,6 +341,15 @@ objects, which has the goal to make space in gpu virtual address spaces.
 .. kernel-doc:: drivers/gpu/drm/i915/i915_gem_shrinker.c
    :internal:
 
+WOPCM
+=====
+
+WOPCM Layout
+------------
+
+.. kernel-doc:: drivers/gpu/drm/i915/intel_wopcm.c
+   :doc: WOPCM Layout
+
 GuC
 ===
 
@@ -361,6 +376,12 @@ GuC Firmware Layout
 
 .. kernel-doc:: drivers/gpu/drm/i915/intel_guc_fwif.h
    :doc: GuC Firmware Layout
+
+GuC Address Space
+-----------------
+
+.. kernel-doc:: drivers/gpu/drm/i915/intel_guc.c
+   :doc: GuC Address Space
 
 Tracing
 =======
@@ -480,5 +501,19 @@ specific details than found in the more high-level sections.
 
 .. kernel-doc:: drivers/gpu/drm/i915/i915_perf.c
    :internal:
+
+Style
+=====
+
+The drm/i915 driver codebase has some style rules in addition to (and, in some
+cases, deviating from) the kernel coding style.
+
+Register macro definition style
+-------------------------------
+
+The style guide for ``i915_reg.h``.
+
+.. kernel-doc:: drivers/gpu/drm/i915/i915_reg.h
+   :doc: The i915 register macro definition style guide
 
 .. WARNING: DOCPROC directive not supported: !Cdrivers/gpu/drm/i915/i915_irq.c

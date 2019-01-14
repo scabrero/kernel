@@ -4,6 +4,8 @@ tegra-drm-y := \
 	drm.o \
 	gem.o \
 	fb.o \
+	hub.o \
+	plane.o \
 	dc.o \
 	output.o \
 	rgb.o \
@@ -16,5 +18,7 @@ tegra-drm-y := \
 	gr3d.o \
 	falcon.o \
 	vic.o
+
+tegra-drm-y += trace.o
 
 obj-$(CONFIG_DRM_TEGRA) += tegra-drm.o

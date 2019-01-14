@@ -74,15 +74,6 @@ Helper Functions Reference
 .. kernel-doc:: drivers/gpu/drm/drm_atomic_helper.c
    :export:
 
-Legacy CRTC/Modeset Helper Functions Reference
-==============================================
-
-.. kernel-doc:: drivers/gpu/drm/drm_crtc_helper.c
-   :doc: overview
-
-.. kernel-doc:: drivers/gpu/drm/drm_crtc_helper.c
-   :export:
-
 Simple KMS Helper Reference
 ===========================
 
@@ -141,6 +132,12 @@ Bridge Helper Reference
    :internal:
 
 .. kernel-doc:: drivers/gpu/drm/drm_bridge.c
+   :export:
+
+Panel-Bridge Helper Reference
+-----------------------------
+
+.. kernel-doc:: drivers/gpu/drm/bridge/panel.c
    :export:
 
 .. _drm_panel_helper:
@@ -276,15 +273,6 @@ Flip-work Helper Reference
 .. kernel-doc:: drivers/gpu/drm/drm_flip_work.c
    :export:
 
-Plane Helper Reference
-======================
-
-.. kernel-doc:: drivers/gpu/drm/drm_plane_helper.c
-   :doc: overview
-
-.. kernel-doc:: drivers/gpu/drm/drm_plane_helper.c
-   :export:
-
 Auxiliary Modeset Helpers
 =========================
 
@@ -292,4 +280,31 @@ Auxiliary Modeset Helpers
    :doc: aux kms helpers
 
 .. kernel-doc:: drivers/gpu/drm/drm_modeset_helper.c
+   :export:
+
+Framebuffer GEM Helper Reference
+================================
+
+.. kernel-doc:: drivers/gpu/drm/drm_gem_framebuffer_helper.c
+   :doc: overview
+
+.. kernel-doc:: drivers/gpu/drm/drm_gem_framebuffer_helper.c
+   :export:
+
+Legacy Plane Helper Reference
+=============================
+
+.. kernel-doc:: drivers/gpu/drm/drm_plane_helper.c
+   :doc: overview
+
+.. kernel-doc:: drivers/gpu/drm/drm_plane_helper.c
+   :export:
+
+Legacy CRTC/Modeset Helper Functions Reference
+==============================================
+
+.. kernel-doc:: drivers/gpu/drm/drm_crtc_helper.c
+   :doc: overview
+
+.. kernel-doc:: drivers/gpu/drm/drm_crtc_helper.c
    :export:

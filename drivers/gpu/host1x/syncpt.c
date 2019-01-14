@@ -54,7 +54,7 @@ static void host1x_syncpt_base_free(struct host1x_syncpt_base *base)
 }
 
 static struct host1x_syncpt *host1x_syncpt_alloc(struct host1x *host,
-						 struct device *dev,
+						 struct host1x_client *client,
 						 unsigned long flags)
 {
 	int i;
@@ -76,11 +76,11 @@ static struct host1x_syncpt *host1x_syncpt_alloc(struct host1x *host,
 	}
 
 	name = kasprintf(GFP_KERNEL, "%02u-%s", sp->id,
-			dev ? dev_name(dev) : NULL);
+			 client ? dev_name(client->dev) : NULL);
 	if (!name)
 		goto free_base;
 
-	sp->dev = dev;
+	sp->client = client;
 	sp->name = name;
 
 	if (flags & HOST1X_SYNCPT_CLIENT_MANAGED)
@@ -358,12 +358,6 @@ bool host1x_syncpt_is_expired(struct host1x_syncpt *sp, u32 thresh)
 		return (s32)(current_val - thresh) >= 0;
 }
 
-/* remove a wait pointed to by patch_addr */
-int host1x_syncpt_patch_wait(struct host1x_syncpt *sp, void *patch_addr)
-{
-	return host1x_hw_syncpt_patch_wait(sp->host, sp, patch_addr);
-}
-
 int host1x_syncpt_init(struct host1x *host)
 {
 	struct host1x_syncpt_base *bases;
@@ -402,12 +396,12 @@ int host1x_syncpt_init(struct host1x *host)
 	return 0;
 }
 
-struct host1x_syncpt *host1x_syncpt_request(struct device *dev,
+struct host1x_syncpt *host1x_syncpt_request(struct host1x_client *client,
 					    unsigned long flags)
 {
-	struct host1x *host = dev_get_drvdata(dev->parent);
+	struct host1x *host = dev_get_drvdata(client->parent->parent);
 
-	return host1x_syncpt_alloc(host, dev, flags);
+	return host1x_syncpt_alloc(host, client, flags);
 }
 EXPORT_SYMBOL(host1x_syncpt_request);
 
@@ -421,7 +415,7 @@ void host1x_syncpt_free(struct host1x_syncpt *sp)
 	host1x_syncpt_base_free(sp->base);
 	kfree(sp->name);
 	sp->base = NULL;
-	sp->dev = NULL;
+	sp->client = NULL;
 	sp->name = NULL;
 	sp->client_managed = false;
 

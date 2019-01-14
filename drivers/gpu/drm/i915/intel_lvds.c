@@ -83,34 +83,35 @@ static struct intel_lvds_connector *to_lvds_connector(struct drm_connector *conn
 	return container_of(connector, struct intel_lvds_connector, base.base);
 }
 
+bool intel_lvds_port_enabled(struct drm_i915_private *dev_priv,
+			     i915_reg_t lvds_reg, enum pipe *pipe)
+{
+	u32 val;
+
+	val = I915_READ(lvds_reg);
+
+	/* asserts want to know the pipe even if the port is disabled */
+	if (HAS_PCH_CPT(dev_priv))
+		*pipe = (val & LVDS_PIPE_SEL_MASK_CPT) >> LVDS_PIPE_SEL_SHIFT_CPT;
+	else
+		*pipe = (val & LVDS_PIPE_SEL_MASK) >> LVDS_PIPE_SEL_SHIFT;
+
+	return val & LVDS_PORT_EN;
+}
+
 static bool intel_lvds_get_hw_state(struct intel_encoder *encoder,
 				    enum pipe *pipe)
 {
-	struct drm_device *dev = encoder->base.dev;
-	struct drm_i915_private *dev_priv = to_i915(dev);
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(&encoder->base);
-	u32 tmp;
 	bool ret;
 
 	if (!intel_display_power_get_if_enabled(dev_priv,
 						encoder->power_domain))
 		return false;
 
-	ret = false;
+	ret = intel_lvds_port_enabled(dev_priv, lvds_encoder->reg, pipe);
 
-	tmp = I915_READ(lvds_encoder->reg);
-
-	if (!(tmp & LVDS_PORT_EN))
-		goto out;
-
-	if (HAS_PCH_CPT(dev_priv))
-		*pipe = PORT_TO_PIPE_CPT(tmp);
-	else
-		*pipe = PORT_TO_PIPE(tmp);
-
-	ret = true;
-
-out:
 	intel_display_power_put(dev_priv, encoder->power_domain);
 
 	return ret;
@@ -187,7 +188,7 @@ static void intel_lvds_pps_get_hw_state(struct drm_i915_private *dev_priv,
 	/* Convert from 100ms to 100us units */
 	pps->t4 = val * 1000;
 
-	if (INTEL_INFO(dev_priv)->gen <= 4 &&
+	if (INTEL_GEN(dev_priv) <= 4 &&
 	    pps->t1_t2 == 0 && pps->t5 == 0 && pps->t3 == 0 && pps->tx == 0) {
 		DRM_DEBUG_KMS("Panel power timings uninitialized, "
 			      "setting defaults\n");
@@ -253,20 +254,19 @@ static void intel_pre_enable_lvds(struct intel_encoder *encoder,
 	temp |= LVDS_PORT_EN | LVDS_A0A2_CLKA_POWER_UP;
 
 	if (HAS_PCH_CPT(dev_priv)) {
-		temp &= ~PORT_TRANS_SEL_MASK;
-		temp |= PORT_TRANS_SEL_CPT(pipe);
+		temp &= ~LVDS_PIPE_SEL_MASK_CPT;
+		temp |= LVDS_PIPE_SEL_CPT(pipe);
 	} else {
-		if (pipe == 1) {
-			temp |= LVDS_PIPEB_SELECT;
-		} else {
-			temp &= ~LVDS_PIPEB_SELECT;
-		}
+		temp &= ~LVDS_PIPE_SEL_MASK;
+		temp |= LVDS_PIPE_SEL(pipe);
 	}
 
 	/* set the corresponsding LVDS_BORDER bit */
 	temp &= ~LVDS_BORDER_ENABLE;
 	temp |= pipe_config->gmch_pfit.lvds_border_bits;
-	/* Set the B0-B3 data pairs corresponding to whether we're going to
+
+	/*
+	 * Set the B0-B3 data pairs corresponding to whether we're going to
 	 * set the DPLLs for dual-channel mode or not.
 	 */
 	if (lvds_encoder->is_dual_link)
@@ -274,7 +274,8 @@ static void intel_pre_enable_lvds(struct intel_encoder *encoder,
 	else
 		temp &= ~(LVDS_B0B3_POWER_UP | LVDS_CLKB_POWER_UP);
 
-	/* It would be nice to set 24 vs 18-bit mode (LVDS_A3_POWER_UP)
+	/*
+	 * It would be nice to set 24 vs 18-bit mode (LVDS_A3_POWER_UP)
 	 * appropriately here, but we need to look more thoroughly into how
 	 * panels behave in the two modes. For now, let's just maintain the
 	 * value we got from the BIOS.
@@ -282,12 +283,16 @@ static void intel_pre_enable_lvds(struct intel_encoder *encoder,
 	temp &= ~LVDS_A3_POWER_MASK;
 	temp |= lvds_encoder->a3_power;
 
-	/* Set the dithering flag on LVDS as needed, note that there is no
+	/*
+	 * Set the dithering flag on LVDS as needed, note that there is no
 	 * special lvds dither control bit on pch-split platforms, dithering is
-	 * only controlled through the PIPECONF reg. */
+	 * only controlled through the PIPECONF reg.
+	 */
 	if (IS_GEN4(dev_priv)) {
-		/* Bspec wording suggests that LVDS port dithering only exists
-		 * for 18bpp panels. */
+		/*
+		 * Bspec wording suggests that LVDS port dithering only exists
+		 * for 18bpp panels.
+		 */
 		if (pipe_config->dither && pipe_config->pipe_bpp == 18)
 			temp |= LVDS_ENABLE_DITHER;
 		else
@@ -302,7 +307,7 @@ static void intel_pre_enable_lvds(struct intel_encoder *encoder,
 	I915_WRITE(lvds_encoder->reg, temp);
 }
 
-/**
+/*
  * Sets the power state for the panel.
  */
 static void intel_enable_lvds(struct intel_encoder *encoder,
@@ -371,6 +376,8 @@ intel_lvds_mode_valid(struct drm_connector *connector,
 	struct drm_display_mode *fixed_mode = intel_connector->panel.fixed_mode;
 	int max_pixclk = to_i915(connector->dev)->max_dotclk_freq;
 
+	if (mode->flags & DRM_MODE_FLAG_DBLSCAN)
+		return MODE_NO_DBLESCAN;
 	if (mode->hdisplay > fixed_mode->hdisplay)
 		return MODE_PANEL;
 	if (mode->vdisplay > fixed_mode->vdisplay)
@@ -420,6 +427,9 @@ static bool intel_lvds_compute_config(struct intel_encoder *intel_encoder,
 	intel_fixed_panel_mode(intel_connector->panel.fixed_mode,
 			       adjusted_mode);
 
+	if (adjusted_mode->flags & DRM_MODE_FLAG_DBLSCAN)
+		return false;
+
 	if (HAS_PCH_SPLIT(dev_priv)) {
 		pipe_config->has_pch_encoder = true;
 
@@ -446,7 +456,7 @@ intel_lvds_detect(struct drm_connector *connector, bool force)
 	return connector_status_connected;
 }
 
-/**
+/*
  * Return the list of DDC modes if available, or the BIOS fixed mode otherwise.
  */
 static int intel_lvds_get_modes(struct drm_connector *connector)
@@ -495,10 +505,8 @@ static const struct drm_connector_helper_funcs intel_lvds_connector_helper_funcs
 };
 
 static const struct drm_connector_funcs intel_lvds_connector_funcs = {
-	.dpms = drm_atomic_helper_connector_dpms,
 	.detect = intel_lvds_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
-	.set_property = drm_atomic_helper_connector_set_property,
 	.atomic_get_property = intel_digital_connector_atomic_get_property,
 	.atomic_set_property = intel_digital_connector_atomic_set_property,
 	.late_register = intel_connector_register,
@@ -801,13 +809,18 @@ static bool compute_is_dual_link_lvds(struct intel_lvds_encoder *lvds_encoder)
 	if (dmi_check_system(intel_dual_link_lvds))
 		return true;
 
-	/* BIOS should set the proper LVDS register value at boot, but
+	/*
+	 * BIOS should set the proper LVDS register value at boot, but
 	 * in reality, it doesn't set the value when the lid is closed;
 	 * we need to check "the value to be set" in VBT when LVDS
 	 * register is uninitialized.
 	 */
 	val = I915_READ(lvds_encoder->reg);
-	if (!(val & ~(LVDS_PIPE_MASK | LVDS_DETECTED)))
+	if (HAS_PCH_CPT(dev_priv))
+		val &= ~(LVDS_DETECTED | LVDS_PIPE_SEL_MASK_CPT);
+	else
+		val &= ~(LVDS_DETECTED | LVDS_PIPE_SEL_MASK);
+	if (val == 0)
 		val = dev_priv->vbt.bios_lvds_val;
 
 	return (val & LVDS_CLKB_POWER_MASK) == LVDS_CLKB_POWER_UP;
@@ -815,13 +828,17 @@ static bool compute_is_dual_link_lvds(struct intel_lvds_encoder *lvds_encoder)
 
 static bool intel_lvds_supported(struct drm_i915_private *dev_priv)
 {
-	/* With the introduction of the PCH we gained a dedicated
-	 * LVDS presence pin, use it. */
+	/*
+	 * With the introduction of the PCH we gained a dedicated
+	 * LVDS presence pin, use it.
+	 */
 	if (HAS_PCH_IBX(dev_priv) || HAS_PCH_CPT(dev_priv))
 		return true;
 
-	/* Otherwise LVDS was only attached to mobile products,
-	 * except for the inglorious 830gm */
+	/*
+	 * Otherwise LVDS was only attached to mobile products,
+	 * except for the inglorious 830gm
+	 */
 	if (INTEL_GEN(dev_priv) <= 4 &&
 	    IS_MOBILE(dev_priv) && !IS_I830(dev_priv))
 		return true;
@@ -831,7 +848,7 @@ static bool intel_lvds_supported(struct drm_i915_private *dev_priv)
 
 /**
  * intel_lvds_init - setup LVDS connectors on this device
- * @dev: drm device
+ * @dev_priv: i915 device
  *
  * Create the connector, register the LVDS DDC bus, and try to figure out what
  * modes we can display on the LVDS panel (if present).
@@ -858,8 +875,16 @@ void intel_lvds_init(struct drm_i915_private *dev_priv)
 		return;
 
 	/* Skip init on machines we know falsely report LVDS */
-	if (dmi_check_system(intel_no_lvds))
+	if (dmi_check_system(intel_no_lvds)) {
+		WARN(!dev_priv->vbt.int_lvds_support,
+		     "Useless DMI match. Internal LVDS support disabled by VBT\n");
 		return;
+	}
+
+	if (!dev_priv->vbt.int_lvds_support) {
+		DRM_DEBUG_KMS("Internal LVDS support disabled by VBT\n");
+		return;
+	}
 
 	if (HAS_PCH_SPLIT(dev_priv))
 		lvds_reg = PCH_LVDS;
@@ -871,10 +896,6 @@ void intel_lvds_init(struct drm_i915_private *dev_priv)
 	if (HAS_PCH_SPLIT(dev_priv)) {
 		if ((lvds & LVDS_DETECTED) == 0)
 			return;
-		if (dev_priv->vbt.edp.support) {
-			DRM_DEBUG_KMS("disable LVDS for eDP support\n");
-			return;
-		}
 	}
 
 	pin = GMBUS_PIN_PANEL;
@@ -978,7 +999,7 @@ void intel_lvds_init(struct drm_i915_private *dev_priv)
 				    intel_gmbus_get_adapter(dev_priv, pin));
 	if (edid) {
 		if (drm_add_edid_modes(connector, edid)) {
-			drm_mode_connector_update_edid_property(connector,
+			drm_connector_update_edid_property(connector,
 								edid);
 		} else {
 			kfree(edid);

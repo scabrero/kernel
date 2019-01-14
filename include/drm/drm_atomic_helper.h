@@ -38,6 +38,12 @@ struct drm_private_state;
 
 int drm_atomic_helper_check_modeset(struct drm_device *dev,
 				struct drm_atomic_state *state);
+int drm_atomic_helper_check_plane_state(struct drm_plane_state *plane_state,
+					const struct drm_crtc_state *crtc_state,
+					int min_scale,
+					int max_scale,
+					bool can_position,
+					bool can_update_disabled);
 int drm_atomic_helper_check_planes(struct drm_device *dev,
 			       struct drm_atomic_state *state);
 int drm_atomic_helper_check(struct drm_device *dev,
@@ -87,12 +93,14 @@ void
 drm_atomic_helper_disable_planes_on_crtc(struct drm_crtc_state *old_crtc_state,
 					 bool atomic);
 
-int drm_atomic_helper_swap_state(struct drm_atomic_state *state, bool stall);
+int __must_check drm_atomic_helper_swap_state(struct drm_atomic_state *state,
+					      bool stall);
 
 /* nonblocking commit helpers */
 int drm_atomic_helper_setup_commit(struct drm_atomic_state *state,
 				   bool nonblock);
 void drm_atomic_helper_wait_for_dependencies(struct drm_atomic_state *state);
+void drm_atomic_helper_fake_vblank(struct drm_atomic_state *state);
 void drm_atomic_helper_commit_hw_done(struct drm_atomic_state *state);
 void drm_atomic_helper_commit_cleanup_done(struct drm_atomic_state *state);
 
@@ -123,15 +131,6 @@ int drm_atomic_helper_commit_duplicated_state(struct drm_atomic_state *state,
 int drm_atomic_helper_resume(struct drm_device *dev,
 			     struct drm_atomic_state *state);
 
-int drm_atomic_helper_crtc_set_property(struct drm_crtc *crtc,
-					struct drm_property *property,
-					uint64_t val);
-int drm_atomic_helper_plane_set_property(struct drm_plane *plane,
-					struct drm_property *property,
-					uint64_t val);
-int drm_atomic_helper_connector_set_property(struct drm_connector *connector,
-					struct drm_property *property,
-					uint64_t val);
 int drm_atomic_helper_page_flip(struct drm_crtc *crtc,
 				struct drm_framebuffer *fb,
 				struct drm_pending_vblank_event *event,
@@ -144,8 +143,6 @@ int drm_atomic_helper_page_flip_target(
 				uint32_t flags,
 				uint32_t target,
 				struct drm_modeset_acquire_ctx *ctx);
-int drm_atomic_helper_connector_dpms(struct drm_connector *connector,
-				     int mode);
 struct drm_encoder *
 drm_atomic_helper_best_encoder(struct drm_connector *connector);
 

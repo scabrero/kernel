@@ -344,7 +344,7 @@ static int btt_log_read(struct arena_info *arena, u32 lane,
 
 	old_ent = btt_log_get_old(arena, &log);
 	if (old_ent < 0 || old_ent > 1) {
-		dev_info(to_dev(arena),
+		dev_err(to_dev(arena),
 				"log corruption (%d): lane %d seq [%d, %d]\n",
 			 old_ent, lane, log.ent[arena->log_index[0]].seq,
 			 log.ent[arena->log_index[1]].seq);
@@ -874,7 +874,7 @@ static int discover_arenas(struct btt *btt)
 				dev_info(to_dev(arena), "No existing arenas\n");
 				goto out;
 			} else {
-				dev_info(to_dev(arena),
+				dev_err(to_dev(arena),
 						"Found corrupted metadata!\n");
 				ret = -ENODEV;
 				goto out;
@@ -1465,7 +1465,7 @@ static blk_qc_t btt_make_request(struct request_queue *q, struct bio *bio)
 		err = btt_do_bvec(btt, bip, bvec.bv_page, len, bvec.bv_offset,
 				  op_is_write(bio_op(bio)), iter.bi_sector);
 		if (err) {
-			dev_info(&btt->nd_btt->dev,
+			dev_err(&btt->nd_btt->dev,
 					"io error in %s sector %lld, len %d,\n",
 					(op_is_write(bio_op(bio))) ? "WRITE" :
 					"READ",
@@ -1486,8 +1486,10 @@ static int btt_rw_page(struct block_device *bdev, sector_t sector,
 {
 	struct btt *btt = bdev->bd_disk->private_data;
 	int rc;
+	unsigned int len;
 
-	rc = btt_do_bvec(btt, NULL, page, PAGE_SIZE, 0, is_write, sector);
+	len = hpage_nr_pages(page) * PAGE_SIZE;
+	rc = btt_do_bvec(btt, NULL, page, len, 0, is_write, sector);
 	if (rc == 0)
 		page_endio(page, is_write, 0);
 
@@ -1551,7 +1553,7 @@ static int btt_blk_init(struct btt *btt)
 		}
 	}
 	set_capacity(btt->btt_disk, btt->nlba * btt->sector_size >> 9);
-	device_add_disk(&btt->nd_btt->dev, btt->btt_disk);
+	device_add_disk(&btt->nd_btt->dev, btt->btt_disk, NULL);
 	btt->nd_btt->size = btt->nlba * (u64)btt->sector_size;
 	revalidate_disk(btt->btt_disk);
 
@@ -1611,7 +1613,7 @@ static struct btt *btt_init(struct nd_btt *nd_btt, unsigned long long rawsize,
 	}
 
 	if (btt->init_state != INIT_READY && nd_region->ro) {
-		dev_info(dev, "%s is read-only, unable to init btt metadata\n",
+		dev_warn(dev, "%s is read-only, unable to init btt metadata\n",
 				dev_name(&nd_region->dev));
 		return NULL;
 	} else if (btt->init_state != INIT_READY) {

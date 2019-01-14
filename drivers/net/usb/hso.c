@@ -861,7 +861,6 @@ static void packetizeRx(struct hso_net *odev, unsigned char *ip_pkt,
 	unsigned short temp_bytes;
 	unsigned short buffer_offset = 0;
 	unsigned short frame_len;
-	unsigned char *tmp_rx_buf;
 
 	/* log if needed */
 	hso_dbg(0x1, "Rx %d bytes\n", count);
@@ -911,9 +910,9 @@ static void packetizeRx(struct hso_net *odev, unsigned char *ip_pkt,
 
 				/* Copy what we got so far. make room for iphdr
 				 * after tail. */
-				tmp_rx_buf = skb_put_data(odev->skb_rx_buf,
-							  (char *)&(odev->rx_ip_hdr),
-							  sizeof(struct iphdr));
+				skb_put_data(odev->skb_rx_buf,
+					     (char *)&(odev->rx_ip_hdr),
+					     sizeof(struct iphdr));
 
 				/* ETH_HLEN */
 				odev->rx_buf_size = sizeof(struct iphdr);
@@ -932,9 +931,9 @@ static void packetizeRx(struct hso_net *odev, unsigned char *ip_pkt,
 			/* Copy the rest of the bytes that are left in the
 			 * buffer into the waiting sk_buf. */
 			/* Make room for temp_bytes after tail. */
-			tmp_rx_buf = skb_put_data(odev->skb_rx_buf,
-						  ip_pkt + buffer_offset,
-						  temp_bytes);
+			skb_put_data(odev->skb_rx_buf,
+				     ip_pkt + buffer_offset,
+				     temp_bytes);
 
 			odev->rx_buf_missing -= temp_bytes;
 			count -= temp_bytes;
@@ -2807,6 +2806,12 @@ static int hso_get_config_data(struct usb_interface *interface)
 		return -EIO;
 	}
 
+	/* check if we have a valid interface */
+	if (if_num > 16) {
+		kfree(config_data);
+		return -EINVAL;
+	}
+
 	switch (config_data[if_num]) {
 	case 0x0:
 		result = 0;
@@ -2877,10 +2882,18 @@ static int hso_probe(struct usb_interface *interface,
 
 	/* Get the interface/port specification from either driver_info or from
 	 * the device itself */
-	if (id->driver_info)
+	if (id->driver_info) {
+		/* if_num is controlled by the device, driver_info is a 0 terminated
+		 * array. Make sure, the access is in bounds! */
+		for (i = 0; i <= if_num; ++i)
+			if (((u32 *)(id->driver_info))[i] == 0)
+				goto exit;
 		port_spec = ((u32 *)(id->driver_info))[if_num];
-	else
+	} else {
 		port_spec = hso_get_config_data(interface);
+		if (port_spec < 0)
+			goto exit;
+	}
 
 	/* Check if we need to switch to alt interfaces prior to port
 	 * configuration */

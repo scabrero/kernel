@@ -25,6 +25,7 @@
 #include <linux/clk.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of_graph.h>
+#include <linux/pinctrl/devinfo.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
@@ -433,7 +434,7 @@ static int rockchip_lvds_bind(struct device *dev, struct device *master,
 		drm_connector_helper_add(connector,
 					 &rockchip_lvds_connector_helper_funcs);
 
-		ret = drm_mode_connector_attach_encoder(connector, encoder);
+		ret = drm_connector_attach_encoder(connector, encoder);
 		if (ret < 0) {
 			DRM_DEV_ERROR(drm_dev->dev,
 				      "failed to attach encoder: %d\n", ret);
@@ -447,14 +448,12 @@ static int rockchip_lvds_bind(struct device *dev, struct device *master,
 			goto err_free_connector;
 		}
 	} else {
-		lvds->bridge->encoder = encoder;
 		ret = drm_bridge_attach(encoder, lvds->bridge, NULL);
 		if (ret) {
 			DRM_DEV_ERROR(drm_dev->dev,
 				      "failed to attach bridge: %d\n", ret);
 			goto err_free_encoder;
 		}
-		encoder->bridge = lvds->bridge;
 	}
 
 	pm_runtime_enable(dev);

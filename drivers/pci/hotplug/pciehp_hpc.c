@@ -502,7 +502,7 @@ int pciehp_power_on_slot(struct controller *ctrl)
 	u16 slot_status;
 	int retval;
 
-	/* Clear sticky power-fault bit from previous power failures */
+	/* Clear power-fault bit from previous power failures */
 	pcie_capability_read_word(pdev, PCI_EXP_SLTSTA, &slot_status);
 	if (slot_status & PCI_EXP_SLTSTA_PFD)
 		pcie_capability_write_word(pdev, PCI_EXP_SLTSTA,
@@ -612,6 +612,14 @@ static irqreturn_t pciehp_ist(int irq, void *dev_id)
 		pciehp_handle_button_press(ctrl);
 	}
 
+	/* Check Power Fault Detected */
+	if ((events & PCI_EXP_SLTSTA_PFD) && !ctrl->power_fault_detected) {
+		ctrl->power_fault_detected = 1;
+		ctrl_err(ctrl, "Slot(%s): Power fault\n", slot_name(ctrl));
+		pciehp_set_attention_status(ctrl, 1);
+		pciehp_green_led_off(ctrl);
+	}
+
 	/*
 	 * Disable requests have higher priority than Presence Detect Changed
 	 * or Data Link Layer State Changed events.
@@ -622,14 +630,6 @@ static irqreturn_t pciehp_ist(int irq, void *dev_id)
 	else if (events & (PCI_EXP_SLTSTA_PDC | PCI_EXP_SLTSTA_DLLSC))
 		pciehp_handle_presence_or_link_change(ctrl, events);
 	up_read(&ctrl->reset_lock);
-
-	/* Check Power Fault Detected */
-	if ((events & PCI_EXP_SLTSTA_PFD) && !ctrl->power_fault_detected) {
-		ctrl->power_fault_detected = 1;
-		ctrl_err(ctrl, "Slot(%s): Power fault\n", slot_name(ctrl));
-		pciehp_set_attention_status(ctrl, 1);
-		pciehp_green_led_off(ctrl);
-	}
 
 	wake_up(&ctrl->requester);
 	return IRQ_HANDLED;
@@ -736,6 +736,7 @@ int pciehp_reset_slot(struct hotplug_slot *hotplug_slot, int probe)
 	struct controller *ctrl = hotplug_slot->private;
 	struct pci_dev *pdev = ctrl_dev(ctrl);
 	u16 stat_mask = 0, ctrl_mask = 0;
+	int rc;
 
 	if (probe)
 		return 0;
@@ -753,7 +754,7 @@ int pciehp_reset_slot(struct hotplug_slot *hotplug_slot, int probe)
 	ctrl_dbg(ctrl, "%s: SLOTCTRL %x write cmd %x\n", __func__,
 		 pci_pcie_cap(ctrl->pcie->port) + PCI_EXP_SLTCTL, 0);
 
-	pci_reset_bridge_secondary_bus(ctrl->pcie->port);
+	rc = pci_reset_bridge_secondary_bus(ctrl->pcie->port);
 
 	pcie_capability_write_word(pdev, PCI_EXP_SLTSTA, stat_mask);
 	pcie_write_cmd_nowait(ctrl, ctrl_mask, ctrl_mask);
@@ -761,7 +762,7 @@ int pciehp_reset_slot(struct hotplug_slot *hotplug_slot, int probe)
 		 pci_pcie_cap(ctrl->pcie->port) + PCI_EXP_SLTCTL, ctrl_mask);
 	up_write(&ctrl->reset_lock);
 
-	return 0;
+	return rc;
 }
 
 int pcie_init_notification(struct controller *ctrl)

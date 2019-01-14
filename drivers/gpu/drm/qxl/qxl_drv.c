@@ -31,13 +31,12 @@
 #include <linux/module.h>
 #include <linux/console.h>
 
-#include "drmP.h"
-#include "drm/drm.h"
-#include "drm_crtc_helper.h"
+#include <drm/drmP.h>
+#include <drm/drm.h>
+#include <drm/drm_crtc_helper.h>
 #include "qxl_drv.h"
 #include "qxl_object.h"
 
-extern int qxl_max_ioctls;
 static const struct pci_device_id pciidlist[] = {
 	{ 0x1b36, 0x100, PCI_ANY_ID, PCI_ANY_ID, PCI_CLASS_DISPLAY_VGA << 8,
 	  0xffff00, 0 },
@@ -264,7 +263,6 @@ static struct drm_driver qxl_driver = {
 
 	.dumb_create = qxl_mode_dumb_create,
 	.dumb_map_offset = qxl_mode_dumb_mmap,
-	.dumb_destroy = drm_gem_dumb_destroy,
 #if defined(CONFIG_DEBUG_FS)
 	.debugfs_init = qxl_debugfs_init,
 #endif

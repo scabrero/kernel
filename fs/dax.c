@@ -25,7 +25,6 @@
 #include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/pagevec.h>
-#include <linux/pmem.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
 #include <linux/uio.h>
@@ -228,7 +227,8 @@ static inline void *unlock_slot(struct address_space *mapping, void **slot)
  * put_locked_mapping_entry() when he locked the entry and now wants to
  * unlock it.
  *
- * The function must be called with mapping->tree_lock held.
+ * The function must be called with mapping->tree_lock held. When -EAGAIN is
+ * reported, the tree_lock is dropped.
  */
 static void *__get_unlocked_mapping_entry(struct address_space *mapping,
 		pgoff_t index, void ***slotp, bool (*wait_fn)(void))
@@ -259,9 +259,18 @@ static void *__get_unlocked_mapping_entry(struct address_space *mapping,
 		spin_unlock_irq(&mapping->tree_lock);
 		revalidate = wait_fn();
 		finish_wait(wq, &ewait.wait);
-		spin_lock_irq(&mapping->tree_lock);
-		if (revalidate)
+		if (revalidate) {
+			/*
+			 * Entry lock waits are exclusive. Wake up the next
+			 * waiter since we aren't sure we will acquire the
+			 * entry lock and thus wake the next waiter up on
+			 * unlock.
+			 */
+			if (waitqueue_active(wq))
+				__wake_up(wq, TASK_NORMAL, 1, &ewait.key);
 			return ERR_PTR(-EAGAIN);
+		}
+		spin_lock_irq(&mapping->tree_lock);
 	}
 }
 
@@ -422,7 +431,7 @@ bool dax_lock_mapping_entry(struct page *page)
 	for (;;) {
 		mapping = READ_ONCE(page->mapping);
 
-		if (!dax_mapping(mapping))
+		if (!mapping || !dax_mapping(mapping))
 			break;
 
 		/*
@@ -451,8 +460,8 @@ bool dax_lock_mapping_entry(struct page *page)
 			spin_unlock_irq(&mapping->tree_lock);
 			break;
 		} else if (IS_ERR(entry)) {
-			spin_unlock_irq(&mapping->tree_lock);
 			WARN_ON_ONCE(PTR_ERR(entry) != -EAGAIN);
+			/* tree_lock gets unlocked on error return */
 			continue;
 		}
 		lock_slot(mapping, slot);
@@ -670,6 +679,8 @@ struct page *dax_layout_busy_page(struct address_space *mapping)
 	while (index < end && pagevec_lookup_entries(&pvec, mapping, index,
 				min(end - index, (pgoff_t)PAGEVEC_SIZE),
 				indices)) {
+		pgoff_t nr_pages = 1;
+
 		for (i = 0; i < pagevec_count(&pvec); i++) {
 			struct page *pvec_ent = pvec.pages[i];
 			void *entry;
@@ -684,8 +695,15 @@ struct page *dax_layout_busy_page(struct address_space *mapping)
 
 			spin_lock_irq(&mapping->tree_lock);
 			entry = get_unlocked_mapping_entry(mapping, index, NULL);
-			if (entry)
+			if (entry) {
 				page = dax_busy_page(entry);
+				/*
+				 * Account for multi-order entries at
+				 * the end of the pagevec.
+				 */
+				if (i + 1 >= pagevec_count(&pvec))
+					nr_pages = 1UL << dax_radix_order(entry);
+			}
 			put_unlocked_mapping_entry(mapping, index, entry);
 			spin_unlock_irq(&mapping->tree_lock);
 			if (page)
@@ -700,7 +718,7 @@ struct page *dax_layout_busy_page(struct address_space *mapping)
 		 */
 		pagevec_remove_exceptionals(&pvec);
 		pagevec_release(&pvec);
-		index++;
+		index += nr_pages;
 
 		if (page)
 			break;

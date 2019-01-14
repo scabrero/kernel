@@ -132,14 +132,14 @@ struct radeon_bo_list *radeon_vm_get_bos(struct radeon_device *rdev,
 	struct radeon_bo_list *list;
 	unsigned i, idx;
 
-	list = drm_malloc_ab(vm->max_pde_used + 2,
-			     sizeof(struct radeon_bo_list));
+	list = kvmalloc_array(vm->max_pde_used + 2,
+			     sizeof(struct radeon_bo_list), GFP_KERNEL);
 	if (!list)
 		return NULL;
 
 	/* add the vm page table to the list */
 	list[0].robj = vm->page_directory;
-	list[0].prefered_domains = RADEON_GEM_DOMAIN_VRAM;
+	list[0].preferred_domains = RADEON_GEM_DOMAIN_VRAM;
 	list[0].allowed_domains = RADEON_GEM_DOMAIN_VRAM;
 	list[0].tv.bo = &vm->page_directory->tbo;
 	list[0].tv.shared = true;
@@ -151,7 +151,7 @@ struct radeon_bo_list *radeon_vm_get_bos(struct radeon_device *rdev,
 			continue;
 
 		list[idx].robj = vm->page_tables[i].bo;
-		list[idx].prefered_domains = RADEON_GEM_DOMAIN_VRAM;
+		list[idx].preferred_domains = RADEON_GEM_DOMAIN_VRAM;
 		list[idx].allowed_domains = RADEON_GEM_DOMAIN_VRAM;
 		list[idx].tv.bo = &list[idx].robj->tbo;
 		list[idx].tv.shared = true;
@@ -387,6 +387,7 @@ static void radeon_vm_set_pages(struct radeon_device *rdev,
 static int radeon_vm_clear_bo(struct radeon_device *rdev,
 			      struct radeon_bo *bo)
 {
+	struct ttm_operation_ctx ctx = { true, false };
 	struct radeon_ib ib;
 	unsigned entries;
 	uint64_t addr;
@@ -396,7 +397,7 @@ static int radeon_vm_clear_bo(struct radeon_device *rdev,
 	if (r)
 		return r;
 
-	r = ttm_bo_validate(&bo->tbo, &bo->placement, true, false);
+	r = ttm_bo_validate(&bo->tbo, &bo->placement, &ctx);
 	if (r)
 		goto error_unreserve;
 

@@ -2038,6 +2038,7 @@ static pci_power_t pci_target_state(struct pci_dev *dev)
 		case PCI_D2:
 			if (pci_no_d1d2(dev))
 				break;
+			/* else: fall through */
 		default:
 			target_state = state;
 		}
@@ -4100,7 +4101,7 @@ static int pci_dev_wait(struct pci_dev *dev, char *reset_type, int timeout)
  * Returns true if the device advertises support for PCIe function level
  * resets.
  */
-static bool pcie_has_flr(struct pci_dev *dev)
+bool pcie_has_flr(struct pci_dev *dev)
 {
 	u32 cap;
 
@@ -4110,6 +4111,7 @@ static bool pcie_has_flr(struct pci_dev *dev)
 	pcie_capability_read_dword(dev, PCI_EXP_DEVCAP, &cap);
 	return cap & PCI_EXP_DEVCAP_FLR;
 }
+EXPORT_SYMBOL_GPL(pcie_has_flr);
 
 /**
  * pcie_flr - initiate a PCIe function level reset
@@ -4290,9 +4292,7 @@ static int pci_parent_bus_reset(struct pci_dev *dev, int probe)
 	if (probe)
 		return 0;
 
-	pci_reset_bridge_secondary_bus(dev->bus->self);
-
-	return 0;
+	return pci_reset_bridge_secondary_bus(dev->bus->self);
 }
 
 static int pci_reset_hotplug_slot(struct hotplug_slot *hotplug, int probe)
@@ -4912,6 +4912,8 @@ static int __pci_reset_slot(struct pci_slot *slot)
 
 static int pci_bus_reset(struct pci_bus *bus, int probe)
 {
+	int ret;
+
 	if (!bus->self || !pci_bus_resetable(bus))
 		return -ENOTTY;
 
@@ -4922,11 +4924,11 @@ static int pci_bus_reset(struct pci_bus *bus, int probe)
 
 	might_sleep();
 
-	pci_reset_bridge_secondary_bus(bus->self);
+	ret = pci_reset_bridge_secondary_bus(bus->self);
 
 	pci_bus_unlock(bus);
 
-	return 0;
+	return ret;
 }
 
 /**
@@ -4959,7 +4961,7 @@ static int __pci_reset_bus(struct pci_bus *bus)
 
 	if (pci_bus_trylock(bus)) {
 		might_sleep();
-		pci_reset_bridge_secondary_bus(bus->self);
+		rc = pci_reset_bridge_secondary_bus(bus->self);
 		pci_bus_unlock(bus);
 	} else
 		rc = -EAGAIN;
@@ -5223,9 +5225,13 @@ enum pci_bus_speed pcie_get_speed_cap(struct pci_dev *dev)
 	u32 lnkcap2, lnkcap;
 
 	/*
-	 * PCIe r4.0 sec 7.5.3.18 recommends using the Supported Link
-	 * Speeds Vector in Link Capabilities 2 when supported, falling
-	 * back to Max Link Speed in Link Capabilities otherwise.
+	 * Link Capabilities 2 was added in PCIe r3.0, sec 7.8.18.  The
+	 * implementation note there recommends using the Supported Link
+	 * Speeds Vector in Link Capabilities 2 when supported.
+	 *
+	 * Without Link Capabilities 2, i.e., prior to PCIe r3.0, software
+	 * should use the Supported Link Speeds field in Link Capabilities,
+	 * where only 2.5 GT/s and 5.0 GT/s speeds were defined.
 	 */
 	pcie_capability_read_dword(dev, PCI_EXP_LNKCAP2, &lnkcap2);
 	if (lnkcap2) { /* PCIe r3.0-compliant */
@@ -5241,16 +5247,10 @@ enum pci_bus_speed pcie_get_speed_cap(struct pci_dev *dev)
 	}
 
 	pcie_capability_read_dword(dev, PCI_EXP_LNKCAP, &lnkcap);
-	if (lnkcap) {
-		if (lnkcap & PCI_EXP_LNKCAP_SLS_16_0GB)
-			return PCIE_SPEED_16_0GT;
-		else if (lnkcap & PCI_EXP_LNKCAP_SLS_8_0GB)
-			return PCIE_SPEED_8_0GT;
-		else if (lnkcap & PCI_EXP_LNKCAP_SLS_5_0GB)
-			return PCIE_SPEED_5_0GT;
-		else if (lnkcap & PCI_EXP_LNKCAP_SLS_2_5GB)
-			return PCIE_SPEED_2_5GT;
-	}
+	if ((lnkcap & PCI_EXP_LNKCAP_SLS) == PCI_EXP_LNKCAP_SLS_5_0GB)
+		return PCIE_SPEED_5_0GT;
+	else if ((lnkcap & PCI_EXP_LNKCAP_SLS) == PCI_EXP_LNKCAP_SLS_2_5GB)
+		return PCIE_SPEED_2_5GT;
 
 	return PCI_SPEED_UNKNOWN;
 }

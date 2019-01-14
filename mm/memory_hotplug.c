@@ -35,6 +35,7 @@
 #include <linux/memblock.h>
 #include <linux/bootmem.h>
 #include <linux/compaction.h>
+#include <linux/rmap.h>
 
 #include <asm/tlbflush.h>
 
@@ -310,7 +311,6 @@ static int __meminit __add_section(int nid, unsigned long phys_start_pfn,
 		struct vmem_altmap *altmap, bool want_memblock)
 {
 	int ret;
-	int i;
 
 	if (pfn_valid(phys_start_pfn))
 		return -EEXIST;
@@ -319,27 +319,10 @@ static int __meminit __add_section(int nid, unsigned long phys_start_pfn,
 	if (ret < 0)
 		return ret;
 
-	/*
-	 * Make all the pages reserved so that nobody will stumble over half
-	 * initialized state.
-	 * FIXME: We also have to associate it with a node because pfn_to_node
-	 * relies on having page with the proper node.
-	 */
-	for (i = 0; i < PAGES_PER_SECTION; i++) {
-		unsigned long pfn = phys_start_pfn + i;
-		struct page *page;
-		if (!pfn_valid(pfn))
-			continue;
-
-		page = pfn_to_page(pfn);
-		set_page_node(page, nid);
-		SetPageReserved(page);
-	}
-
 	if (!want_memblock)
 		return 0;
 
-	return register_new_memory(nid, __pfn_to_section(phys_start_pfn));
+	return hotplug_memory_register(nid, __pfn_to_section(phys_start_pfn));
 }
 
 /*
@@ -1005,8 +988,15 @@ int __ref online_pages(unsigned long pfn, unsigned long nr_pages, int online_typ
 	int nid;
 	int ret;
 	struct memory_notify arg;
+	struct memory_block *mem;
 
-	nid = pfn_to_nid(pfn);
+	/*
+	 * We can't use pfn_to_nid() because nid might be stored in struct page
+	 * which is not yet initialized. Instead, we find nid from memory block.
+	 */
+	mem = find_memory_block(__pfn_to_section(pfn));
+	nid = mem->nid;
+
 	if (!allow_online_pfn_range(nid, pfn, nr_pages, online_type))
 		return -EINVAL;
 
@@ -1282,7 +1272,7 @@ int __ref add_memory_resource(int nid, struct resource *res, bool online)
 		 * nodes have to go through register_node.
 		 * TODO clean up this mess.
 		 */
-		ret = link_mem_sections(nid, start_pfn, nr_pages);
+		ret = link_mem_sections(nid, start_pfn, nr_pages, false);
 register_fail:
 		/*
 		 * If sysfs file of new node can't create, cpu on the node
@@ -1500,6 +1490,21 @@ do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 			continue;
 		}
 
+		/*
+		 * HWPoison pages have elevated reference counts so the migration would
+		 * fail on them. It also doesn't make any sense to migrate them in the
+		 * first place. Still try to unmap such a page in case it is still mapped
+		 * (e.g. current hwpoison implementation doesn't unmap KSM pages but keep
+		 * the unmap as the catch all safety net).
+		 */
+		if (PageHWPoison(page)) {
+			if (WARN_ON(PageLRU(page)))
+				isolate_lru_page(page);
+			if (page_mapped(page))
+				try_to_unmap(page, TTU_IGNORE_MLOCK | TTU_IGNORE_ACCESS);
+			continue;
+		}
+
 		if (!get_page_unless_zero(page))
 			continue;
 		/*
@@ -1519,10 +1524,8 @@ do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 						    page_is_file_cache(page));
 
 		} else {
-#ifdef CONFIG_DEBUG_VM
-			pr_alert("failed to isolate pfn %lx\n", pfn);
+			pr_warn("failed to isolate pfn %lx\n", pfn);
 			dump_page(page, "isolation failed");
-#endif
 			put_page(page);
 			/* Because we don't have big zone->lock. we should
 			   check this again here. */
@@ -1542,8 +1545,14 @@ do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 		/* Allocate a new page from the nearest neighbor node */
 		ret = migrate_pages(&source, new_node_page, NULL, 0,
 					MIGRATE_SYNC, MR_MEMORY_HOTPLUG);
-		if (ret)
+		if (ret) {
+			list_for_each_entry(page, &source, lru) {
+				pr_warn("migrating pfn %lx failed ret:%d ",
+				       page_to_pfn(page), ret);
+				dump_page(page, "migration failure");
+			}
 			putback_movable_pages(&source);
+		}
 	}
 out:
 	return ret;
@@ -1743,16 +1752,15 @@ static int __ref __offline_pages(unsigned long start_pfn,
 	unsigned long valid_start, valid_end;
 	struct zone *zone;
 	struct memory_notify arg;
+	char *reason;
 
-	/* at least, alignment against pageblock is necessary */
-	if (!IS_ALIGNED(start_pfn, pageblock_nr_pages))
-		return -EINVAL;
-	if (!IS_ALIGNED(end_pfn, pageblock_nr_pages))
-		return -EINVAL;
 	/* This makes hotplug much easier...and readable.
 	   we assume this for now. .*/
-	if (!test_pages_in_a_zone(start_pfn, end_pfn, &valid_start, &valid_end))
-		return -EINVAL;
+	if (!test_pages_in_a_zone(start_pfn, end_pfn, &valid_start, &valid_end)) {
+		ret = -EINVAL;
+		reason = "multizone range";
+		goto failed_removal;
+	}
 
 	zone = page_zone(pfn_to_page(valid_start));
 	node = zone_to_nid(zone);
@@ -1764,8 +1772,10 @@ static int __ref __offline_pages(unsigned long start_pfn,
 	/* set above range as isolated */
 	ret = start_isolate_page_range(start_pfn, end_pfn,
 				       MIGRATE_MOVABLE, true);
-	if (ret)
-		return ret;
+	if (ret) {
+		reason = "failure to isolate range";
+		goto failed_removal;
+	}
 
 	arg.start_pfn = start_pfn;
 	arg.nr_pages = nr_pages;
@@ -1773,15 +1783,19 @@ static int __ref __offline_pages(unsigned long start_pfn,
 
 	ret = memory_notify(MEM_GOING_OFFLINE, &arg);
 	ret = notifier_to_errno(ret);
-	if (ret)
-		goto failed_removal;
+	if (ret) {
+		reason = "notifier failure";
+		goto failed_removal_isolated;
+	}
 
 	pfn = start_pfn;
 repeat:
 	/* start memory hot removal */
 	ret = -EINTR;
-	if (signal_pending(current))
-		goto failed_removal;
+	if (signal_pending(current)) {
+		reason = "signal backoff";
+		goto failed_removal_isolated;
+	}
 	ret = 0;
 
 	cond_resched();
@@ -1799,8 +1813,10 @@ repeat:
 	 * actually in order to make hugetlbfs's object counting consistent.
 	 */
 	ret = dissolve_free_huge_pages(start_pfn, end_pfn);
-	if (ret)
-		goto failed_removal;
+	if (ret) {
+		reason = "failure to dissolve huge pages";
+		goto failed_removal_isolated;
+	}
 	/* check again */
 	offlined_pages = check_pages_isolated(start_pfn, end_pfn);
 	if (offlined_pages < 0)
@@ -1841,13 +1857,14 @@ repeat:
 	memory_notify(MEM_OFFLINE, &arg);
 	return 0;
 
-failed_removal:
-	pr_debug("memory offlining [mem %#010llx-%#010llx] failed\n",
-		 (unsigned long long) start_pfn << PAGE_SHIFT,
-		 ((unsigned long long) end_pfn << PAGE_SHIFT) - 1);
-	memory_notify(MEM_CANCEL_OFFLINE, &arg);
-	/* pushback to free area */
+failed_removal_isolated:
 	undo_isolate_page_range(start_pfn, end_pfn, MIGRATE_MOVABLE);
+failed_removal:
+	pr_debug("memory offlining [mem %#010llx-%#010llx] failed due to %s\n",
+		 (unsigned long long) start_pfn << PAGE_SHIFT,
+		 ((unsigned long long) end_pfn << PAGE_SHIFT) - 1,
+		 reason);
+	memory_notify(MEM_CANCEL_OFFLINE, &arg);
 	return ret;
 }
 

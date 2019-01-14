@@ -28,7 +28,7 @@
 
 #include "fm10k.h"
 
-#define DRV_VERSION	"0.23.4-k"
+#define DRV_VERSION	"0.26.1-k"
 #define DRV_SUMMARY	"Intel(R) Ethernet Switch Host Interface Driver"
 const char fm10k_driver_version[] = DRV_VERSION;
 char fm10k_driver_name[] = "fm10k";
@@ -1482,11 +1482,11 @@ static int fm10k_poll(struct napi_struct *napi, int budget)
 	if (!clean_complete)
 		return budget;
 
-	/* all work done, exit the polling mode */
-	napi_complete_done(napi, work_done);
-
-	/* re-enable the q_vector */
-	fm10k_qv_enable(q_vector);
+	/* Exit the polling mode, but don't re-enable interrupts if stack might
+	 * poll us due to busy-polling
+	 */
+	if (likely(napi_complete_done(napi, work_done)))
+		fm10k_qv_enable(q_vector);
 
 	return min(work_done, budget - 1);
 }

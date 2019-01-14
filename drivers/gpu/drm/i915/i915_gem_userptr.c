@@ -411,64 +411,47 @@ struct get_pages_work {
 	struct task_struct *task;
 };
 
-#if IS_ENABLED(CONFIG_SWIOTLB)
-#define swiotlb_active() swiotlb_nr_tbl()
-#else
-#define swiotlb_active() 0
-#endif
-
-static int
-st_set_pages(struct sg_table **st, struct page **pvec, int num_pages)
-{
-	struct scatterlist *sg;
-	int ret, n;
-
-	*st = kmalloc(sizeof(**st), GFP_KERNEL);
-	if (*st == NULL)
-		return -ENOMEM;
-
-	if (swiotlb_active()) {
-		ret = sg_alloc_table(*st, num_pages, GFP_KERNEL);
-		if (ret)
-			goto err;
-
-		for_each_sg((*st)->sgl, sg, num_pages, n)
-			sg_set_page(sg, pvec[n], PAGE_SIZE, 0);
-	} else {
-		ret = sg_alloc_table_from_pages(*st, pvec, num_pages,
-						0, num_pages << PAGE_SHIFT,
-						GFP_KERNEL);
-		if (ret)
-			goto err;
-	}
-
-	return 0;
-
-err:
-	kfree(*st);
-	*st = NULL;
-	return ret;
-}
-
 static struct sg_table *
-__i915_gem_userptr_set_pages(struct drm_i915_gem_object *obj,
-			     struct page **pvec, int num_pages)
+__i915_gem_userptr_alloc_pages(struct drm_i915_gem_object *obj,
+			       struct page **pvec, int num_pages)
 {
-	struct sg_table *pages;
+	unsigned int max_segment = i915_sg_segment_size();
+	struct sg_table *st;
+	unsigned int sg_page_sizes;
 	int ret;
 
-	ret = st_set_pages(&pages, pvec, num_pages);
-	if (ret)
-		return ERR_PTR(ret);
+	st = kmalloc(sizeof(*st), GFP_KERNEL);
+	if (!st)
+		return ERR_PTR(-ENOMEM);
 
-	ret = i915_gem_gtt_prepare_pages(obj, pages);
+alloc_table:
+	ret = __sg_alloc_table_from_pages(st, pvec, num_pages,
+					  0, num_pages << PAGE_SHIFT,
+					  max_segment,
+					  GFP_KERNEL);
 	if (ret) {
-		sg_free_table(pages);
-		kfree(pages);
+		kfree(st);
 		return ERR_PTR(ret);
 	}
 
-	return pages;
+	ret = i915_gem_gtt_prepare_pages(obj, st);
+	if (ret) {
+		sg_free_table(st);
+
+		if (max_segment > PAGE_SIZE) {
+			max_segment = PAGE_SIZE;
+			goto alloc_table;
+		}
+
+		kfree(st);
+		return ERR_PTR(ret);
+	}
+
+	sg_page_sizes = i915_sg_page_sizes(st->sgl);
+
+	__i915_gem_object_set_pages(obj, st, sg_page_sizes);
+
+	return st;
 }
 
 static int
@@ -519,12 +502,12 @@ __i915_gem_userptr_get_pages_worker(struct work_struct *_work)
 	ret = -ENOMEM;
 	pinned = 0;
 
-	pvec = drm_malloc_gfp(npages, sizeof(struct page *), GFP_TEMPORARY);
+	pvec = kvmalloc_array(npages, sizeof(struct page *), GFP_KERNEL);
 	if (pvec != NULL) {
 		struct mm_struct *mm = obj->userptr.mm->mm;
 		unsigned int flags = 0;
 
-		if (!obj->userptr.read_only)
+		if (!i915_gem_object_is_readonly(obj))
 			flags |= FOLL_WRITE;
 
 		ret = -EFAULT;
@@ -552,9 +535,9 @@ __i915_gem_userptr_get_pages_worker(struct work_struct *_work)
 		struct sg_table *pages = ERR_PTR(ret);
 
 		if (pinned == npages) {
-			pages = __i915_gem_userptr_set_pages(obj, pvec, npages);
+			pages = __i915_gem_userptr_alloc_pages(obj, pvec,
+							       npages);
 			if (!IS_ERR(pages)) {
-				__i915_gem_object_set_pages(obj, pages);
 				pinned = 0;
 				pages = NULL;
 			}
@@ -567,7 +550,7 @@ __i915_gem_userptr_get_pages_worker(struct work_struct *_work)
 	mutex_unlock(&obj->mm.lock);
 
 	release_pages(pvec, pinned);
-	drm_free_large(pvec);
+	kvfree(pvec);
 
 	i915_gem_object_put(obj);
 	put_task_struct(work->task);
@@ -615,8 +598,7 @@ __i915_gem_userptr_get_pages_schedule(struct drm_i915_gem_object *obj)
 	return ERR_PTR(-EAGAIN);
 }
 
-static struct sg_table *
-i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
+static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 {
 	const int num_pages = obj->base.size >> PAGE_SHIFT;
 	struct mm_struct *mm = obj->userptr.mm->mm;
@@ -645,23 +627,23 @@ i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	if (obj->userptr.work) {
 		/* active flag should still be held for the pending work */
 		if (IS_ERR(obj->userptr.work))
-			return ERR_CAST(obj->userptr.work);
+			return PTR_ERR(obj->userptr.work);
 		else
-			return ERR_PTR(-EAGAIN);
+			return -EAGAIN;
 	}
 
 	pvec = NULL;
 	pinned = 0;
 
 	if (mm == current->mm) {
-		pvec = drm_malloc_gfp(num_pages, sizeof(struct page *),
-				      GFP_TEMPORARY |
+		pvec = kvmalloc_array(num_pages, sizeof(struct page *),
+				      GFP_KERNEL |
 				      __GFP_NORETRY |
 				      __GFP_NOWARN);
 		if (pvec) /* defer to worker if malloc fails */
 			pinned = __get_user_pages_fast(obj->userptr.ptr,
 						       num_pages,
-						       !obj->userptr.read_only,
+						       !i915_gem_object_is_readonly(obj),
 						       pvec);
 	}
 
@@ -673,7 +655,7 @@ i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 		pages = __i915_gem_userptr_get_pages_schedule(obj);
 		active = pages == ERR_PTR(-EAGAIN);
 	} else {
-		pages = __i915_gem_userptr_set_pages(obj, pvec, num_pages);
+		pages = __i915_gem_userptr_alloc_pages(obj, pvec, num_pages);
 		active = !IS_ERR(pages);
 	}
 	if (active)
@@ -681,9 +663,9 @@ i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 
 	if (IS_ERR(pages))
 		release_pages(pvec, pinned);
-	drm_free_large(pvec);
+	kvfree(pvec);
 
-	return pages;
+	return PTR_ERR_OR_ZERO(pages);
 }
 
 static void
@@ -739,7 +721,7 @@ static const struct drm_i915_gem_object_ops i915_gem_userptr_ops = {
 	.release = i915_gem_userptr_release,
 };
 
-/**
+/*
  * Creates a new mm object that wraps some normal memory from the process
  * context - user memory.
  *
@@ -775,7 +757,9 @@ static const struct drm_i915_gem_object_ops i915_gem_userptr_ops = {
  * dma-buf instead.
  */
 int
-i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+i915_gem_userptr_ioctl(struct drm_device *dev,
+		       void *data,
+		       struct drm_file *file)
 {
 	struct drm_i915_private *dev_priv = to_i915(dev);
 	struct drm_i915_gem_userptr *args = data;
@@ -805,10 +789,15 @@ i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 		return -EFAULT;
 
 	if (args->flags & I915_USERPTR_READ_ONLY) {
-		/* On almost all of the current hw, we cannot tell the GPU that a
-		 * page is readonly, so this is just a placeholder in the uAPI.
+		struct i915_hw_ppgtt *ppgtt;
+
+		/*
+		 * On almost all of the older hw, we cannot tell the GPU that
+		 * a page is readonly.
 		 */
-		return -ENODEV;
+		ppgtt = dev_priv->kernel_context->ppgtt;
+		if (!ppgtt || !ppgtt->vm.has_read_only)
+			return -ENODEV;
 	}
 
 	obj = i915_gem_object_alloc(dev_priv);
@@ -817,12 +806,13 @@ i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 
 	drm_gem_private_object_init(dev, &obj->base, args->user_size);
 	i915_gem_object_init(obj, &i915_gem_userptr_ops);
-	obj->base.read_domains = I915_GEM_DOMAIN_CPU;
-	obj->base.write_domain = I915_GEM_DOMAIN_CPU;
+	obj->read_domains = I915_GEM_DOMAIN_CPU;
+	obj->write_domain = I915_GEM_DOMAIN_CPU;
 	i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);
 
 	obj->userptr.ptr = args->user_ptr;
-	obj->userptr.read_only = !!(args->flags & I915_USERPTR_READ_ONLY);
+	if (args->flags & I915_USERPTR_READ_ONLY)
+		i915_gem_object_set_readonly(obj);
 
 	/* And keep a pointer to the current->mm for resolving the user pages
 	 * at binding. This means that we need to hook into the mmu_notifier

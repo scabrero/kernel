@@ -1,14 +1,7 @@
-/*
- * Copyright (c) 2016-2017 Hisilicon Limited.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- */
+// SPDX-License-Identifier: GPL-2.0+
+// Copyright (c) 2016-2017 Hisilicon Limited.
 
 #include <linux/list.h>
-#include <linux/slab.h>
 #include <linux/spinlock.h>
 
 #include "hnae3.h"
@@ -36,8 +29,8 @@ static bool hnae3_client_match(enum hnae3_client_type client_type,
 	return false;
 }
 
-static void hnae3_set_client_init_flag(struct hnae3_client *client,
-				       struct hnae3_ae_dev *ae_dev, int inited)
+void hnae3_set_client_init_flag(struct hnae3_client *client,
+				struct hnae3_ae_dev *ae_dev, int inited)
 {
 	switch (client->type) {
 	case HNAE3_CLIENT_KNIC:
@@ -53,6 +46,7 @@ static void hnae3_set_client_init_flag(struct hnae3_client *client,
 		break;
 	}
 }
+EXPORT_SYMBOL(hnae3_set_client_init_flag);
 
 static int hnae3_get_client_init_flag(struct hnae3_client *client,
 				       struct hnae3_ae_dev *ae_dev)
@@ -93,14 +87,11 @@ static int hnae3_match_n_instantiate(struct hnae3_client *client,
 	/* now, (un-)instantiate client by calling lower layer */
 	if (is_reg) {
 		ret = ae_dev->ops->init_client_instance(client, ae_dev);
-		if (ret) {
+		if (ret)
 			dev_err(&ae_dev->pdev->dev,
-				"fail to instantiate client\n");
-			return ret;
-		}
+				"fail to instantiate client, ret = %d\n", ret);
 
-		hnae3_set_client_init_flag(client, ae_dev, 1);
-		return 0;
+		return ret;
 	}
 
 	if (hnae3_get_client_init_flag(client, ae_dev)) {
@@ -135,7 +126,8 @@ int hnae3_register_client(struct hnae3_client *client)
 		ret = hnae3_match_n_instantiate(client, ae_dev, true);
 		if (ret)
 			dev_err(&ae_dev->pdev->dev,
-				"match and instantiation failed for port\n");
+				"match and instantiation failed for port, ret = %d\n",
+				ret);
 	}
 
 exit:
@@ -185,7 +177,8 @@ void hnae3_register_ae_algo(struct hnae3_ae_algo *ae_algo)
 		ae_dev->ops = ae_algo->ops;
 		ret = ae_algo->ops->init_ae_dev(ae_dev);
 		if (ret) {
-			dev_err(&ae_dev->pdev->dev, "init ae_dev error.\n");
+			dev_err(&ae_dev->pdev->dev,
+				"init ae_dev error, ret = %d\n", ret);
 			continue;
 		}
 
@@ -198,7 +191,8 @@ void hnae3_register_ae_algo(struct hnae3_ae_algo *ae_algo)
 			ret = hnae3_match_n_instantiate(client, ae_dev, true);
 			if (ret)
 				dev_err(&ae_dev->pdev->dev,
-					"match and instantiation failed\n");
+					"match and instantiation failed, ret = %d\n",
+					ret);
 		}
 	}
 
@@ -271,7 +265,8 @@ void hnae3_register_ae_dev(struct hnae3_ae_dev *ae_dev)
 		/* ae_dev init should set flag */
 		ret = ae_dev->ops->init_ae_dev(ae_dev);
 		if (ret) {
-			dev_err(&ae_dev->pdev->dev, "init ae_dev error\n");
+			dev_err(&ae_dev->pdev->dev,
+				"init ae_dev error, ret = %d\n", ret);
 			goto out_err;
 		}
 
@@ -286,7 +281,8 @@ void hnae3_register_ae_dev(struct hnae3_ae_dev *ae_dev)
 		ret = hnae3_match_n_instantiate(client, ae_dev, true);
 		if (ret)
 			dev_err(&ae_dev->pdev->dev,
-				"match and instantiation failed\n");
+				"match and instantiation failed, ret = %d\n",
+				ret);
 	}
 
 out_err:
