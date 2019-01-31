@@ -1084,6 +1084,20 @@ static int i915_driver_init_hw(struct drm_i915_private *dev_priv)
 
 	intel_device_info_runtime_init(mkwrite_device_info(dev_priv));
 
+	if (HAS_EXECLISTS(dev_priv)) {
+		/*
+		 * Older GVT emulation depends upon intercepting CSB mmio,
+		 * which we no longer use, preferring to use the HWSP cache
+		 * instead.
+		 */
+		if (intel_vgpu_active(dev_priv) &&
+		    !intel_vgpu_has_hwsp_emulation(dev_priv)) {
+			i915_report_error(dev_priv,
+					  "old vGPU host found, support for HWSP emulation required\n");
+			return -ENXIO;
+		}
+	}
+
 	intel_sanitize_options(dev_priv);
 
 	i915_perf_init(dev_priv);
@@ -1153,6 +1167,7 @@ static int i915_driver_init_hw(struct drm_i915_private *dev_priv)
 
 	intel_uncore_sanitize(dev_priv);
 
+	intel_gt_init_workarounds(dev_priv);
 	i915_gem_load_init_fences(dev_priv);
 
 	/* On the 945G/GM, the chipset reports the MSI capability on the
@@ -1637,7 +1652,7 @@ static int i915_drm_suspend_late(struct drm_device *dev, bool hibernation)
 	}
 
 	ret = 0;
-	if (IS_GEN9_LP(dev_priv))
+	if (INTEL_GEN(dev_priv) >= 11 || IS_GEN9_LP(dev_priv))
 		bxt_enable_dc9(dev_priv);
 	else if (IS_HASWELL(dev_priv) || IS_BROADWELL(dev_priv))
 		hsw_enable_pc8(dev_priv);
@@ -1833,7 +1848,7 @@ static int i915_drm_resume_early(struct drm_device *dev)
 
 	intel_uncore_resume_early(dev_priv);
 
-	if (IS_GEN9_LP(dev_priv)) {
+	if (INTEL_GEN(dev_priv) >= 11 || IS_GEN9_LP(dev_priv)) {
 		gen9_sanitize_dc_state(dev_priv);
 		bxt_disable_dc9(dev_priv);
 	} else if (IS_HASWELL(dev_priv) || IS_BROADWELL(dev_priv)) {
@@ -2608,7 +2623,10 @@ static int intel_runtime_suspend(struct device *kdev)
 	intel_uncore_suspend(dev_priv);
 
 	ret = 0;
-	if (IS_GEN9_LP(dev_priv)) {
+	if (INTEL_GEN(dev_priv) >= 11) {
+		icl_display_core_uninit(dev_priv);
+		bxt_enable_dc9(dev_priv);
+	} else if (IS_GEN9_LP(dev_priv)) {
 		bxt_display_core_uninit(dev_priv);
 		bxt_enable_dc9(dev_priv);
 	} else if (IS_HASWELL(dev_priv) || IS_BROADWELL(dev_priv)) {
@@ -2693,7 +2711,18 @@ static int intel_runtime_resume(struct device *kdev)
 	if (intel_uncore_unclaimed_mmio(dev_priv))
 		DRM_DEBUG_DRIVER("Unclaimed access during suspend, bios?\n");
 
-	if (IS_GEN9_LP(dev_priv)) {
+	if (INTEL_GEN(dev_priv) >= 11) {
+		bxt_disable_dc9(dev_priv);
+		icl_display_core_init(dev_priv, true);
+		if (dev_priv->csr.dmc_payload) {
+			if (dev_priv->csr.allowed_dc_mask &
+			    DC_STATE_EN_UPTO_DC6)
+				skl_enable_dc6(dev_priv);
+			else if (dev_priv->csr.allowed_dc_mask &
+				 DC_STATE_EN_UPTO_DC5)
+				gen9_enable_dc5(dev_priv);
+		}
+	} else if (IS_GEN9_LP(dev_priv)) {
 		bxt_disable_dc9(dev_priv);
 		bxt_display_core_init(dev_priv, true);
 		if (dev_priv->csr.dmc_payload &&

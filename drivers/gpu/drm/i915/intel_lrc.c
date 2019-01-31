@@ -558,11 +558,6 @@ static void inject_preempt_context(struct intel_engine_cs *engine)
 
 	GEM_BUG_ON(execlists->preempt_complete_status !=
 		   upper_32_bits(ce->lrc_desc));
-	GEM_BUG_ON((ce->lrc_reg_state[CTX_CONTEXT_CONTROL + 1] &
-		    _MASKED_BIT_ENABLE(CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT |
-				       CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT)) !=
-		   _MASKED_BIT_ENABLE(CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT |
-				      CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT));
 
 	/*
 	 * Switch to our empty preempt context so
@@ -825,6 +820,8 @@ execlists_cancel_port_requests(struct intel_engine_execlists * const execlists)
 
 static void reset_csb_pointers(struct intel_engine_execlists *execlists)
 {
+	const unsigned int reset_value = GEN8_CSB_ENTRIES - 1;
+
 	/*
 	 * After a reset, the HW starts writing into CSB entry [0]. We
 	 * therefore have to set our HEAD pointer back one entry so that
@@ -834,8 +831,8 @@ static void reset_csb_pointers(struct intel_engine_execlists *execlists)
 	 * inline comparison of our cached head position against the last HW
 	 * write works even before the first interrupt.
 	 */
-	execlists->csb_head = execlists->csb_write_reset;
-	WRITE_ONCE(*execlists->csb_write, execlists->csb_write_reset);
+	execlists->csb_head = reset_value;
+	WRITE_ONCE(*execlists->csb_write, reset_value);
 }
 
 static void nop_submission_tasklet(unsigned long data)
@@ -1294,6 +1291,8 @@ static void execlists_context_destroy(struct intel_context *ce)
 
 static void execlists_context_unpin(struct intel_context *ce)
 {
+	i915_gem_context_unpin_hw_id(ce->gem_context);
+
 	intel_ring_unpin(ce->ring);
 
 	ce->state->obj->pin_global--;
@@ -1353,6 +1352,10 @@ __execlists_context_pin(struct intel_engine_cs *engine,
 	if (ret)
 		goto unpin_map;
 
+	ret = i915_gem_context_pin_hw_id(ctx);
+	if (ret)
+		goto unpin_ring;
+
 	intel_lr_context_descriptor_update(ctx, engine, ce);
 
 	ce->lrc_reg_state = vaddr + LRC_STATE_PN * PAGE_SIZE;
@@ -1365,6 +1368,8 @@ __execlists_context_pin(struct intel_engine_cs *engine,
 	i915_gem_context_get(ctx);
 	return ce;
 
+unpin_ring:
+	intel_ring_unpin(ce->ring);
 unpin_map:
 	i915_gem_object_unpin_map(ce->state->obj);
 unpin_vma:
@@ -1793,6 +1798,8 @@ static bool unexpected_starting_state(struct intel_engine_cs *engine)
 static int gen8_init_common_ring(struct intel_engine_cs *engine)
 {
 	int ret;
+
+	intel_engine_apply_workarounds(engine);
 
 	ret = intel_mocs_init_engine(engine);
 	if (ret)
@@ -2401,12 +2408,6 @@ logical_ring_setup(struct intel_engine_cs *engine)
 	logical_ring_default_irqs(engine);
 }
 
-static bool csb_force_mmio(struct drm_i915_private *i915)
-{
-	/* Older GVT emulation depends upon intercepting CSB mmio */
-	return intel_vgpu_active(i915) && !intel_vgpu_has_hwsp_emulation(i915);
-}
-
 static int logical_ring_init(struct intel_engine_cs *engine)
 {
 	struct drm_i915_private *i915 = engine->i915;
@@ -2436,25 +2437,15 @@ static int logical_ring_init(struct intel_engine_cs *engine)
 			upper_32_bits(ce->lrc_desc);
 	}
 
-	execlists->csb_read =
-		i915->regs + i915_mmio_reg_offset(RING_CONTEXT_STATUS_PTR(engine));
-	if (csb_force_mmio(i915)) {
-		execlists->csb_status = (u32 __force *)
-			(i915->regs + i915_mmio_reg_offset(RING_CONTEXT_STATUS_BUF_LO(engine, 0)));
+	execlists->csb_status =
+		&engine->status_page.page_addr[I915_HWS_CSB_BUF0_INDEX];
 
-		execlists->csb_write = (u32 __force *)execlists->csb_read;
-		execlists->csb_write_reset =
-			_MASKED_FIELD(GEN8_CSB_WRITE_PTR_MASK,
-				      GEN8_CSB_ENTRIES - 1);
-	} else {
-		execlists->csb_status =
-			&engine->status_page.page_addr[I915_HWS_CSB_BUF0_INDEX];
+	execlists->csb_write =
+		&engine->status_page.page_addr[intel_hws_csb_write_index(i915)];
 
-		execlists->csb_write =
-			&engine->status_page.page_addr[intel_hws_csb_write_index(i915)];
-		execlists->csb_write_reset = GEN8_CSB_ENTRIES - 1;
-	}
 	reset_csb_pointers(execlists);
+
+	intel_engine_init_workarounds(engine);
 
 	return 0;
 
@@ -2511,6 +2502,9 @@ int logical_xcs_ring_init(struct intel_engine_cs *engine)
 static u32
 make_rpcs(struct drm_i915_private *dev_priv)
 {
+	bool subslice_pg = INTEL_INFO(dev_priv)->sseu.has_subslice_pg;
+	u8 slices = hweight8(INTEL_INFO(dev_priv)->sseu.slice_mask);
+	u8 subslices = hweight8(INTEL_INFO(dev_priv)->sseu.subslice_mask[0]);
 	u32 rpcs = 0;
 
 	/*
@@ -2521,30 +2515,88 @@ make_rpcs(struct drm_i915_private *dev_priv)
 		return 0;
 
 	/*
+	 * Since the SScount bitfield in GEN8_R_PWR_CLK_STATE is only three bits
+	 * wide and Icelake has up to eight subslices, specfial programming is
+	 * needed in order to correctly enable all subslices.
+	 *
+	 * According to documentation software must consider the configuration
+	 * as 2x4x8 and hardware will translate this to 1x8x8.
+	 *
+	 * Furthemore, even though SScount is three bits, maximum documented
+	 * value for it is four. From this some rules/restrictions follow:
+	 *
+	 * 1.
+	 * If enabled subslice count is greater than four, two whole slices must
+	 * be enabled instead.
+	 *
+	 * 2.
+	 * When more than one slice is enabled, hardware ignores the subslice
+	 * count altogether.
+	 *
+	 * From these restrictions it follows that it is not possible to enable
+	 * a count of subslices between the SScount maximum of four restriction,
+	 * and the maximum available number on a particular SKU. Either all
+	 * subslices are enabled, or a count between one and four on the first
+	 * slice.
+	 */
+	if (IS_GEN11(dev_priv) && slices == 1 && subslices >= 4) {
+		GEM_BUG_ON(subslices & 1);
+
+		subslice_pg = false;
+		slices *= 2;
+	}
+
+	/*
 	 * Starting in Gen9, render power gating can leave
 	 * slice/subslice/EU in a partially enabled state. We
 	 * must make an explicit request through RPCS for full
 	 * enablement.
 	*/
 	if (INTEL_INFO(dev_priv)->sseu.has_slice_pg) {
-		rpcs |= GEN8_RPCS_S_CNT_ENABLE;
-		rpcs |= hweight8(INTEL_INFO(dev_priv)->sseu.slice_mask) <<
-			GEN8_RPCS_S_CNT_SHIFT;
-		rpcs |= GEN8_RPCS_ENABLE;
+		u32 mask, val = slices;
+
+		if (INTEL_GEN(dev_priv) >= 11) {
+			mask = GEN11_RPCS_S_CNT_MASK;
+			val <<= GEN11_RPCS_S_CNT_SHIFT;
+		} else {
+			mask = GEN8_RPCS_S_CNT_MASK;
+			val <<= GEN8_RPCS_S_CNT_SHIFT;
+		}
+
+		GEM_BUG_ON(val & ~mask);
+		val &= mask;
+
+		rpcs |= GEN8_RPCS_ENABLE | GEN8_RPCS_S_CNT_ENABLE | val;
 	}
 
-	if (INTEL_INFO(dev_priv)->sseu.has_subslice_pg) {
-		rpcs |= GEN8_RPCS_SS_CNT_ENABLE;
-		rpcs |= hweight8(INTEL_INFO(dev_priv)->sseu.subslice_mask[0]) <<
-			GEN8_RPCS_SS_CNT_SHIFT;
-		rpcs |= GEN8_RPCS_ENABLE;
+	if (subslice_pg) {
+		u32 val = subslices;
+
+		val <<= GEN8_RPCS_SS_CNT_SHIFT;
+
+		GEM_BUG_ON(val & ~GEN8_RPCS_SS_CNT_MASK);
+		val &= GEN8_RPCS_SS_CNT_MASK;
+
+		rpcs |= GEN8_RPCS_ENABLE | GEN8_RPCS_SS_CNT_ENABLE | val;
 	}
 
 	if (INTEL_INFO(dev_priv)->sseu.has_eu_pg) {
-		rpcs |= INTEL_INFO(dev_priv)->sseu.eu_per_subslice <<
-			GEN8_RPCS_EU_MIN_SHIFT;
-		rpcs |= INTEL_INFO(dev_priv)->sseu.eu_per_subslice <<
-			GEN8_RPCS_EU_MAX_SHIFT;
+		u32 val;
+
+		val = INTEL_INFO(dev_priv)->sseu.eu_per_subslice <<
+		      GEN8_RPCS_EU_MIN_SHIFT;
+		GEM_BUG_ON(val & ~GEN8_RPCS_EU_MIN_MASK);
+		val &= GEN8_RPCS_EU_MIN_MASK;
+
+		rpcs |= val;
+
+		val = INTEL_INFO(dev_priv)->sseu.eu_per_subslice <<
+		      GEN8_RPCS_EU_MAX_SHIFT;
+		GEM_BUG_ON(val & ~GEN8_RPCS_EU_MAX_MASK);
+		val &= GEN8_RPCS_EU_MAX_MASK;
+
+		rpcs |= val;
+
 		rpcs |= GEN8_RPCS_ENABLE;
 	}
 
@@ -2601,11 +2653,15 @@ static void execlists_init_reg_state(u32 *regs,
 				 MI_LRI_FORCE_POSTED;
 
 	CTX_REG(regs, CTX_CONTEXT_CONTROL, RING_CONTEXT_CONTROL(engine),
-		_MASKED_BIT_DISABLE(CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT |
-				    CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT) |
+		_MASKED_BIT_DISABLE(CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT) |
 		_MASKED_BIT_ENABLE(CTX_CTRL_INHIBIT_SYN_CTX_SWITCH |
 				   (HAS_RESOURCE_STREAMER(dev_priv) ?
 				   CTX_CTRL_RS_CTX_ENABLE : 0)));
+	if (INTEL_GEN(dev_priv) < 11) {
+		regs[CTX_CONTEXT_CONTROL + 1] |=
+			_MASKED_BIT_DISABLE(CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT |
+					    CTX_CTRL_RS_CTX_ENABLE);
+	}
 	CTX_REG(regs, CTX_RING_HEAD, RING_HEAD(base), 0);
 	CTX_REG(regs, CTX_RING_TAIL, RING_TAIL(base), 0);
 	CTX_REG(regs, CTX_RING_BUFFER_START, RING_START(base), 0);

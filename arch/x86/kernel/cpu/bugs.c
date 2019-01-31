@@ -331,7 +331,7 @@ static enum spectre_v2_mitigation spectre_v2_enabled __ro_after_init =
 static enum spectre_v2_user_mitigation spectre_v2_user __ro_after_init =
 	SPECTRE_V2_USER_NONE;
 
-#ifdef RETPOLINE
+#ifdef CONFIG_RETPOLINE
 static bool spectre_v2_bad_module;
 
 bool retpoline_module_ok(bool has_retpoline)
@@ -631,10 +631,13 @@ static void __init spectre_v2_select_mitigation(void)
 		break;
 
 	case SPECTRE_V2_CMD_IBRS:
-		mode = SPECTRE_V2_IBRS;
-		setup_force_cpu_cap(X86_FEATURE_USE_IBRS);
-		goto specv2_set_mode;
+		if (boot_cpu_has(X86_FEATURE_IBRS)) {
+			mode = SPECTRE_V2_IBRS;
+			setup_force_cpu_cap(X86_FEATURE_USE_IBRS);
+			goto specv2_set_mode;
+		}
 
+		/* fall through */
 	case SPECTRE_V2_CMD_FORCE:
 	case SPECTRE_V2_CMD_AUTO:
 		if (boot_cpu_has(X86_FEATURE_IBRS_ENHANCED)) {

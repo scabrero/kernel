@@ -184,6 +184,7 @@ nfsd3_proc_write(struct svc_rqst *rqstp, struct nfsd3_writeargs *argp,
 {
 	__be32	nfserr;
 	unsigned long cnt = argp->len;
+	unsigned int nvecs;
 
 	dprintk("nfsd: WRITE(3)    %s %d bytes at %Lu%s\n",
 				SVCFH_fmt(&argp->fh),
@@ -193,9 +194,12 @@ nfsd3_proc_write(struct svc_rqst *rqstp, struct nfsd3_writeargs *argp,
 
 	fh_copy(&resp->fh, &argp->fh);
 	resp->committed = argp->stable;
+	nvecs = svc_fill_write_vector(rqstp, &argp->first, cnt);
+	if (!nvecs)
+		RETURN_STATUS(nfserr_io);
 	nfserr = nfsd_write(rqstp, &resp->fh, argp->offset,
-				rqstp->rq_vec, argp->vlen,
-				&cnt, resp->committed);
+			    rqstp->rq_vec, nvecs, &cnt,
+			    resp->committed);
 	resp->count = cnt;
 	RETURN_STATUS(nfserr);
 }
@@ -267,6 +271,16 @@ nfsd3_proc_symlink(struct svc_rqst *rqstp, struct nfsd3_symlinkargs *argp,
 					   struct nfsd3_diropres    *resp)
 {
 	__be32	nfserr;
+
+	if (argp->tlen == 0)
+		RETURN_STATUS(nfserr_inval);
+	if (argp->tlen > NFS3_MAXPATHLEN)
+		RETURN_STATUS(nfserr_nametoolong);
+
+	argp->tname = svc_fill_symlink_pathname(rqstp, &argp->first,
+						argp->tlen);
+	if (IS_ERR(argp->tname))
+		RETURN_STATUS(nfserrno(PTR_ERR(argp->tname)));
 
 	dprintk("nfsd: SYMLINK(3)  %s %.*s -> %.*s\n",
 				SVCFH_fmt(&argp->ffh),
