@@ -1230,14 +1230,10 @@ void qla24xx_handle_gpdb_event(scsi_qla_host_t *vha, struct event_arg *ea)
 	if (fcport->disc_state == DSC_DELETE_PEND)
 		return;
 
-	if (fcport->fc4f_nvme &&
-	    (pd->current_login_state >> 4) == PDS_PRLI_COMPLETE)
+	if (fcport->fc4f_nvme)
 		ls = pd->current_login_state >> 4;
-	else {
-		fcport->fc4_type = FC4_TYPE_FCP_SCSI;
-		fcport->fc4f_nvme = 0;
+	else
 		ls = pd->current_login_state & 0xf;
-	}
 
 	if (ea->sp->gen2 != fcport->login_gen) {
 		/* target side must have changed it. */
@@ -1477,29 +1473,6 @@ int qla24xx_fcport_handle_login(struct scsi_qla_host *vha, fc_port_t *fcport)
 	return 0;
 }
 
-static
-void qla24xx_handle_rscn_event(fc_port_t *fcport, struct event_arg *ea)
-{
-	fcport->rscn_gen++;
-
-	ql_dbg(ql_dbg_disc, fcport->vha, 0x210c,
-	    "%s %8phC DS %d LS %d\n",
-	    __func__, fcport->port_name, fcport->disc_state,
-	    fcport->fw_login_state);
-
-	if (fcport->flags & FCF_ASYNC_SENT)
-		return;
-
-	switch (fcport->disc_state) {
-	case DSC_DELETED:
-	case DSC_LOGIN_COMPLETE:
-		qla24xx_post_gpnid_work(fcport->vha, &ea->id);
-		break;
-	default:
-		break;
-	}
-}
-
 int qla24xx_post_newsess_work(struct scsi_qla_host *vha, port_id_t *id,
     u8 *port_name, u8 *node_name, void *pla, u8 fc4_type)
 {
@@ -1566,8 +1539,6 @@ static void qla_handle_els_plogi_done(scsi_qla_host_t *vha,
 
 void qla2x00_fcport_event_handler(scsi_qla_host_t *vha, struct event_arg *ea)
 {
-	fc_port_t *f, *tf;
-	uint32_t id = 0, mask, rid;
 	fc_port_t *fcport;
 
 	switch (ea->event) {
@@ -1580,10 +1551,6 @@ void qla2x00_fcport_event_handler(scsi_qla_host_t *vha, struct event_arg *ea)
 	case FCME_RSCN:
 		if (test_bit(UNLOADING, &vha->dpc_flags))
 			return;
-		switch (ea->id.b.rsvd_1) {
-		case RSCN_PORT_ADDR:
-#define BIGSCAN 1
-#if defined BIGSCAN & BIGSCAN > 0
 		{
 			unsigned long flags;
 			fcport = qla2x00_find_fcport_by_nportid
@@ -1601,59 +1568,6 @@ void qla2x00_fcport_event_handler(scsi_qla_host_t *vha, struct event_arg *ea)
 				schedule_delayed_work(&vha->scan.scan_work, 5);
 			}
 			spin_unlock_irqrestore(&vha->work_lock, flags);
-		}
-#else
-		{
-			int rc;
-			fcport = qla2x00_find_fcport_by_nportid(vha, &ea->id, 1);
-			if (!fcport) {
-				/* cable moved */
-				 rc = qla24xx_post_gpnid_work(vha, &ea->id);
-				 if (rc) {
-					 ql_log(ql_log_warn, vha, 0xd044,
-					     "RSCN GPNID work failed %06x\n",
-					     ea->id.b24);
-				 }
-			} else {
-				ea->fcport = fcport;
-				fcport->scan_needed = 1;
-				qla24xx_handle_rscn_event(fcport, ea);
-			}
-		}
-#endif
-			break;
-		case RSCN_AREA_ADDR:
-		case RSCN_DOM_ADDR:
-			if (ea->id.b.rsvd_1 == RSCN_AREA_ADDR) {
-				mask = 0xffff00;
-				ql_dbg(ql_dbg_async, vha, 0x5044,
-				    "RSCN: Area 0x%06x was affected\n",
-				    ea->id.b24);
-			} else {
-				mask = 0xff0000;
-				ql_dbg(ql_dbg_async, vha, 0x507a,
-				    "RSCN: Domain 0x%06x was affected\n",
-				    ea->id.b24);
-			}
-
-			rid = ea->id.b24 & mask;
-			list_for_each_entry_safe(f, tf, &vha->vp_fcports,
-			    list) {
-				id = f->d_id.b24 & mask;
-				if (rid == id) {
-					ea->fcport = f;
-					qla24xx_handle_rscn_event(f, ea);
-				}
-			}
-			break;
-		case RSCN_FAB_ADDR:
-		default:
-			ql_log(ql_log_warn, vha, 0xd045,
-			    "RSCN: Fabric was affected. Addr format %d\n",
-			    ea->id.b.rsvd_1);
-			qla2x00_mark_all_devices_lost(vha, 1);
-			set_bit(LOOP_RESYNC_NEEDED, &vha->dpc_flags);
-			set_bit(LOCAL_LOOP_UPDATE, &vha->dpc_flags);
 		}
 		break;
 	case FCME_GNL_DONE:
@@ -1715,11 +1629,7 @@ void qla_rscn_replay(fc_port_t *fcport)
                ea.event = FCME_RSCN;
                ea.id = fcport->d_id;
                ea.id.b.rsvd_1 = RSCN_PORT_ADDR;
-#if defined BIGSCAN & BIGSCAN > 0
                qla2x00_fcport_event_handler(fcport->vha, &ea);
-#else
-               qla24xx_post_gpnid_work(fcport->vha, &ea.id);
-#endif
 	}
 }
 
@@ -1835,7 +1745,7 @@ qla24xx_async_abort_cmd(srb_t *cmd_sp, bool wait)
 	int rval = QLA_FUNCTION_FAILED;
 
 	sp = qla2xxx_get_qpair_sp(cmd_sp->vha, cmd_sp->qpair, cmd_sp->fcport,
-	    GFP_KERNEL);
+	    GFP_ATOMIC);
 	if (!sp)
 		goto done;
 
@@ -4759,6 +4669,16 @@ qla2x00_alloc_fcport(scsi_qla_host_t *vha, gfp_t flags)
 	if (!fcport)
 		return NULL;
 
+	fcport->ct_desc.ct_sns = dma_alloc_coherent(&vha->hw->pdev->dev,
+		sizeof(struct ct_sns_pkt), &fcport->ct_desc.ct_sns_dma,
+		flags);
+	if (!fcport->ct_desc.ct_sns) {
+		ql_log(ql_log_warn, vha, 0xd049,
+		    "Failed to allocate ct_sns request.\n");
+		kfree(fcport);
+		return NULL;
+	}
+
 	/* Setup fcport template structure. */
 	fcport->vha = vha;
 	fcport->port_type = FCT_UNKNOWN;
@@ -4767,13 +4687,11 @@ qla2x00_alloc_fcport(scsi_qla_host_t *vha, gfp_t flags)
 	fcport->supported_classes = FC_COS_UNSPECIFIED;
 	fcport->fp_speed = PORT_SPEED_UNKNOWN;
 
-	fcport->ct_desc.ct_sns = dma_alloc_coherent(&vha->hw->pdev->dev,
-		sizeof(struct ct_sns_pkt), &fcport->ct_desc.ct_sns_dma,
-		flags);
 	fcport->disc_state = DSC_DELETED;
 	fcport->fw_login_state = DSC_LS_PORT_UNAVAIL;
 	fcport->deleted = QLA_SESS_DELETED;
 	fcport->login_retry = vha->hw->login_retry_count;
+	fcport->chip_reset = vha->hw->base_qpair->chip_reset;
 	fcport->logout_on_delete = 1;
 
 	if (!fcport->ct_desc.ct_sns) {
@@ -4782,6 +4700,7 @@ qla2x00_alloc_fcport(scsi_qla_host_t *vha, gfp_t flags)
 		kfree(fcport);
 		fcport = NULL;
 	}
+
 	INIT_WORK(&fcport->del_work, qla24xx_delete_sess_fn);
 	INIT_WORK(&fcport->reg_work, qla_register_fcport_fn);
 	INIT_LIST_HEAD(&fcport->gnl_entry);
@@ -5048,11 +4967,6 @@ qla2x00_configure_local_loop(scsi_qla_host_t *vha)
 
 		/* Bypass reserved domain fields. */
 		if ((domain & 0xf0) == 0xf0)
-			continue;
-
-		/* Bypass if not same domain and area of adapter. */
-		if (area && domain &&
-		    (area != vha->d_id.b.area || domain != vha->d_id.b.domain))
 			continue;
 
 		/* Bypass invalid local loop ID. */
