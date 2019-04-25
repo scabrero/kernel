@@ -257,8 +257,11 @@ enum cxgb4_state {
 	CXGB4_STATE_UP,
 	CXGB4_STATE_START_RECOVERY,
 	CXGB4_STATE_DOWN,
-	CXGB4_STATE_DETACH,
+	CXGB4_STATE_DETACH
+#ifndef __GENKSYMS__
+	,
 	CXGB4_STATE_FATAL_ERROR
+#endif
 };
 
 enum cxgb4_control {
@@ -284,12 +287,14 @@ struct cxgb4_virt_res {                      /* virtualized HW resources */
 	struct cxgb4_range iscsi;
 	struct cxgb4_range stag;
 	struct cxgb4_range rq;
-	struct cxgb4_range srq;
 	struct cxgb4_range pbl;
 	struct cxgb4_range qp;
 	struct cxgb4_range cq;
 	struct cxgb4_range ocq;
 	unsigned int ncrypto_fc;
+#ifndef __GENKSYMS__
+	struct cxgb4_range srq;
+#endif
 };
 
 struct chcr_stats_debug {
@@ -352,8 +357,11 @@ struct cxgb4_lld_info {
 	void **iscsi_ppm;		     /* iscsi page pod manager */
 	int nodeid;			     /* device numa node id */
 	bool fr_nsmr_tpte_wr_support;	     /* FW supports FR_NSMR_TPTE_WR */
+#ifndef __GENKSYMS__
 	bool write_w_imm_support;         /* FW supports WRITE_WITH_IMMEDIATE */
 	bool write_cmpl_support;             /* FW supports WRITE_CMPL WR */
+	unsigned int sge_host_page_size;     /* SGE host page size */
+#endif
 };
 
 struct cxgb4_uld_info {
@@ -376,7 +384,7 @@ struct cxgb4_uld_info {
 	void (*lro_flush)(struct t4_lro_mgr *);
 };
 
-int cxgb4_register_uld(enum cxgb4_uld type, const struct cxgb4_uld_info *p);
+void cxgb4_register_uld(enum cxgb4_uld type, const struct cxgb4_uld_info *p);
 int cxgb4_unregister_uld(enum cxgb4_uld type);
 int cxgb4_ofld_send(struct net_device *dev, struct sk_buff *skb);
 int cxgb4_crypto_send(struct net_device *dev, struct sk_buff *skb);
