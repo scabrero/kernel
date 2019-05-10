@@ -466,6 +466,13 @@ static int nouveau_drm_probe(struct pci_dev *pdev,
 	bool boot = false;
 	int ret;
 
+	/* XXX disable nouveau for 10de:1cbb on Leap 15.1 GM (bsc#1133593) */
+	if (pdev->vendor == 0x10de && pdev->device == 0x1cbb) {
+		dev_err(&pdev->dev, "nouveau is DISABLED for this device!\n");
+		dev_err(&pdev->dev, "See https://bugzilla.opensuse.org/show_bug.cgi?id=1133593.\n");
+		return -ENODEV;
+	}
+
 	if (vga_switcheroo_client_probe_defer(pdev))
 		return -EPROBE_DEFER;
 
