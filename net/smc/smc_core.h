@@ -51,6 +51,24 @@ enum smc_wr_reg_state {
 	FAILED		/* ib_wr_reg_mr response: failure */
 };
 
+struct smc_rdma_sge {				/* sges for RDMA writes */
+	struct ib_sge		wr_tx_rdma_sge[SMC_IB_MAX_SEND_SGE];
+};
+
+#define SMC_MAX_RDMA_WRITES	2		/* max. # of RDMA writes per
+						 * message send
+						 */
+
+struct smc_rdma_sges {				/* sges per message send */
+	struct smc_rdma_sge	tx_rdma_sge[SMC_MAX_RDMA_WRITES];
+};
+
+struct smc_rdma_wr {				/* work requests per message
+						 * send
+						 */
+	struct ib_rdma_wr	wr_tx_rdma[SMC_MAX_RDMA_WRITES];
+};
+
 struct smc_link {
 	struct smc_ib_device	*smcibdev;	/* ib-device */
 	u8			ibport;		/* port - values 1 | 2 */
@@ -114,6 +132,8 @@ struct smc_link_extra {
 	struct completion	llc_delete_rkey; /* wait 4 rx of del rkey */
 	int			llc_delete_rkey_rc; /* rc from del rkey msg */
 	struct mutex		llc_delete_rkey_mutex; /* serialize usage */
+	struct smc_rdma_sges	*wr_tx_rdma_sges;/*RDMA WRITE gather meta data*/
+	struct smc_rdma_wr	*wr_tx_rdmas;	/* WR RDMA WRITE */
 };
 
 /* For now we just allow one parallel link per link group. The SMC protocol

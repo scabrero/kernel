@@ -159,6 +159,7 @@ static inline int smc_wr_tx_get_free_slot_index(struct smc_link *link, u32 *idx)
  * @link:		Pointer to smc_link used to later send the message.
  * @handler:		Send completion handler function pointer.
  * @wr_buf:		Out value returns pointer to message buffer.
+ * @wr_rdma_buf:	Out value returns pointer to rdma work request.
  * @wr_pend_priv:	Out value returns pointer serving as handler context.
  *
  * Return: 0 on success, or -errno on error.
@@ -166,8 +167,11 @@ static inline int smc_wr_tx_get_free_slot_index(struct smc_link *link, u32 *idx)
 int smc_wr_tx_get_free_slot(struct smc_link *link,
 			    smc_wr_tx_handler handler,
 			    struct smc_wr_buf **wr_buf,
+			    struct smc_rdma_wr **wr_rdma_buf,
 			    struct smc_wr_tx_pend_priv **wr_pend_priv)
 {
+	struct smc_link_group *lgr = smc_get_lgr(link);
+	struct smc_link_extra *extra = &lgr->lnk_extra[SMC_SINGLE_LINK];
 	struct smc_wr_tx_pend *wr_pend;
 	u32 idx = link->wr_tx_cnt;
 	struct ib_send_wr *wr_ib;
@@ -203,6 +207,8 @@ int smc_wr_tx_get_free_slot(struct smc_link *link,
 	wr_ib = &link->wr_tx_ibs[idx];
 	wr_ib->wr_id = wr_id;
 	*wr_buf = &link->wr_tx_bufs[idx];
+	if (wr_rdma_buf)
+		*wr_rdma_buf = &extra->wr_tx_rdmas[idx];
 	*wr_pend_priv = &wr_pend->priv;
 	return 0;
 }
@@ -217,10 +223,10 @@ int smc_wr_tx_put_slot(struct smc_link *link,
 		u32 idx = pend->idx;
 
 		/* clear the full struct smc_wr_tx_pend including .priv */
-		memset(&link->wr_tx_pends[pend->idx], 0,
-		       sizeof(link->wr_tx_pends[pend->idx]));
-		memset(&link->wr_tx_bufs[pend->idx], 0,
-		       sizeof(link->wr_tx_bufs[pend->idx]));
+		memset(&link->wr_tx_pends[idx], 0,
+		       sizeof(link->wr_tx_pends[idx]));
+		memset(&link->wr_tx_bufs[idx], 0,
+		       sizeof(link->wr_tx_bufs[idx]));
 		test_and_clear_bit(idx, link->wr_tx_mask);
 		return 1;
 	}
@@ -462,6 +468,8 @@ void smc_wr_remember_qp_attr(struct smc_link *lnk)
 
 static void smc_wr_init_sge(struct smc_link *lnk)
 {
+	struct smc_link_group *lgr = smc_get_lgr(lnk);
+	struct smc_link_extra *extra = &lgr->lnk_extra[SMC_SINGLE_LINK];
 	u32 i;
 
 	for (i = 0; i < lnk->wr_tx_cnt; i++) {
@@ -469,12 +477,26 @@ static void smc_wr_init_sge(struct smc_link *lnk)
 			lnk->wr_tx_dma_addr + i * SMC_WR_BUF_SIZE;
 		lnk->wr_tx_sges[i].length = SMC_WR_TX_SIZE;
 		lnk->wr_tx_sges[i].lkey = lnk->roce_pd->local_dma_lkey;
+		extra->wr_tx_rdma_sges[i].tx_rdma_sge[0].wr_tx_rdma_sge[0].lkey =
+			lnk->roce_pd->local_dma_lkey;
+		extra->wr_tx_rdma_sges[i].tx_rdma_sge[0].wr_tx_rdma_sge[1].lkey =
+			lnk->roce_pd->local_dma_lkey;
+		extra->wr_tx_rdma_sges[i].tx_rdma_sge[1].wr_tx_rdma_sge[0].lkey =
+			lnk->roce_pd->local_dma_lkey;
+		extra->wr_tx_rdma_sges[i].tx_rdma_sge[1].wr_tx_rdma_sge[1].lkey =
+			lnk->roce_pd->local_dma_lkey;
 		lnk->wr_tx_ibs[i].next = NULL;
 		lnk->wr_tx_ibs[i].sg_list = &lnk->wr_tx_sges[i];
 		lnk->wr_tx_ibs[i].num_sge = 1;
 		lnk->wr_tx_ibs[i].opcode = IB_WR_SEND;
 		lnk->wr_tx_ibs[i].send_flags =
 			IB_SEND_SIGNALED | IB_SEND_SOLICITED;
+		extra->wr_tx_rdmas[i].wr_tx_rdma[0].wr.opcode = IB_WR_RDMA_WRITE;
+		extra->wr_tx_rdmas[i].wr_tx_rdma[1].wr.opcode = IB_WR_RDMA_WRITE;
+		extra->wr_tx_rdmas[i].wr_tx_rdma[0].wr.sg_list =
+			extra->wr_tx_rdma_sges[i].tx_rdma_sge[0].wr_tx_rdma_sge;
+		extra->wr_tx_rdmas[i].wr_tx_rdma[1].wr.sg_list =
+			extra->wr_tx_rdma_sges[i].tx_rdma_sge[1].wr_tx_rdma_sge;
 	}
 	for (i = 0; i < lnk->wr_rx_cnt; i++) {
 		lnk->wr_rx_sges[i].addr =
@@ -519,14 +541,21 @@ void smc_wr_free_link(struct smc_link *lnk)
 
 void smc_wr_free_link_mem(struct smc_link *lnk)
 {
+	struct smc_link_group *lgr = smc_get_lgr(lnk);
+	struct smc_link_extra *extra = &lgr->lnk_extra[SMC_SINGLE_LINK];
+
 	kfree(lnk->wr_tx_pends);
 	lnk->wr_tx_pends = NULL;
 	kfree(lnk->wr_tx_mask);
 	lnk->wr_tx_mask = NULL;
 	kfree(lnk->wr_tx_sges);
 	lnk->wr_tx_sges = NULL;
+	kfree(extra->wr_tx_rdma_sges);
+	extra->wr_tx_rdma_sges = NULL;
 	kfree(lnk->wr_rx_sges);
 	lnk->wr_rx_sges = NULL;
+	kfree(extra->wr_tx_rdmas);
+	extra->wr_tx_rdmas = NULL;
 	kfree(lnk->wr_rx_ibs);
 	lnk->wr_rx_ibs = NULL;
 	kfree(lnk->wr_tx_ibs);
@@ -539,6 +568,9 @@ void smc_wr_free_link_mem(struct smc_link *lnk)
 
 int smc_wr_alloc_link_mem(struct smc_link *link)
 {
+	struct smc_link_group *lgr = smc_get_lgr(link);
+	struct smc_link_extra *extra = &lgr->lnk_extra[SMC_SINGLE_LINK];
+
 	/* allocate link related memory */
 	link->wr_tx_bufs = kcalloc(SMC_WR_BUF_CNT, SMC_WR_BUF_SIZE, GFP_KERNEL);
 	if (!link->wr_tx_bufs)
@@ -556,10 +588,20 @@ int smc_wr_alloc_link_mem(struct smc_link *link)
 				  GFP_KERNEL);
 	if (!link->wr_rx_ibs)
 		goto no_mem_wr_tx_ibs;
+	extra->wr_tx_rdmas = kcalloc(SMC_WR_BUF_CNT,
+				    sizeof(extra->wr_tx_rdmas[0]),
+				    GFP_KERNEL);
+	if (!extra->wr_tx_rdmas)
+		goto no_mem_wr_rx_ibs;
+	extra->wr_tx_rdma_sges = kcalloc(SMC_WR_BUF_CNT,
+					sizeof(extra->wr_tx_rdma_sges[0]),
+					GFP_KERNEL);
+	if (!extra->wr_tx_rdma_sges)
+		goto no_mem_wr_tx_rdmas;
 	link->wr_tx_sges = kcalloc(SMC_WR_BUF_CNT, sizeof(link->wr_tx_sges[0]),
 				   GFP_KERNEL);
 	if (!link->wr_tx_sges)
-		goto no_mem_wr_rx_ibs;
+		goto no_mem_wr_tx_rdma_sges;
 	link->wr_rx_sges = kcalloc(SMC_WR_BUF_CNT * 3,
 				   sizeof(link->wr_rx_sges[0]),
 				   GFP_KERNEL);
@@ -583,6 +625,10 @@ no_mem_wr_rx_sges:
 	kfree(link->wr_rx_sges);
 no_mem_wr_tx_sges:
 	kfree(link->wr_tx_sges);
+no_mem_wr_tx_rdma_sges:
+	kfree(extra->wr_tx_rdma_sges);
+no_mem_wr_tx_rdmas:
+	kfree(extra->wr_tx_rdmas);
 no_mem_wr_rx_ibs:
 	kfree(link->wr_rx_ibs);
 no_mem_wr_tx_ibs:
