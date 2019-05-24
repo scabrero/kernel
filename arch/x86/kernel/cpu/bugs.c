@@ -650,6 +650,7 @@ static enum spectre_v2_mitigation_cmd __init spectre_v2_parse_cmdline(void)
 	}
 
 	if (cmd == SPECTRE_V2_CMD_RETPOLINE_AMD &&
+	    boot_cpu_data.x86_vendor != X86_VENDOR_HYGON &&
 	    boot_cpu_data.x86_vendor != X86_VENDOR_AMD) {
 		pr_err("retpoline,amd selected but CPU is not AMD. Switching to AUTO select\n");
 		return SPECTRE_V2_CMD_AUTO;
@@ -658,23 +659,6 @@ static enum spectre_v2_mitigation_cmd __init spectre_v2_parse_cmdline(void)
 	spec_v2_print_cond(mitigation_options[i].option,
 			   mitigation_options[i].secure);
 	return cmd;
-}
-
-/* Check for Skylake-like CPUs (for RSB and IBRS handling) */
-static bool __init is_skylake_era(void)
-{
-	if (boot_cpu_data.x86_vendor == X86_VENDOR_INTEL &&
-	    boot_cpu_data.x86 == 6) {
-		switch (boot_cpu_data.x86_model) {
-		case INTEL_FAM6_SKYLAKE_MOBILE:
-		case INTEL_FAM6_SKYLAKE_DESKTOP:
-		case INTEL_FAM6_SKYLAKE_X:
-		case INTEL_FAM6_KABYLAKE_MOBILE:
-		case INTEL_FAM6_KABYLAKE_DESKTOP:
-			return true;
-		}
-	}
-	return false;
 }
 
 static void __init spectre_v2_select_mitigation(void)
@@ -720,16 +704,6 @@ static void __init spectre_v2_select_mitigation(void)
 			wrmsrl(MSR_IA32_SPEC_CTRL, x86_spec_ctrl_base);
 			goto specv2_set_mode;
 		}
-
-		/*
-		 * If we have IBRS support, and either Skylake or !RETPOLINE,
-		 * then that's what we do.
-		 */
-		if (boot_cpu_has(X86_FEATURE_IBRS) && is_skylake_era()) {
-			mode = SPECTRE_V2_IBRS;
-			setup_force_cpu_cap(X86_FEATURE_USE_IBRS);
-			goto specv2_set_mode;
-		}
 		/* fall through */
 	case SPECTRE_V2_CMD_RETPOLINE:
 		if (IS_ENABLED(CONFIG_RETPOLINE))
@@ -740,7 +714,8 @@ static void __init spectre_v2_select_mitigation(void)
 	return;
 
 retpoline_auto:
-	if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD) {
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD ||
+	    boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
 	retpoline_amd:
 		if (!boot_cpu_has(X86_FEATURE_LFENCE_RDTSC)) {
 			pr_err("Spectre mitigation: LFENCE not serializing, switching to generic retpoline\n");

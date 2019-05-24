@@ -458,7 +458,7 @@ xfs_vn_get_link(
 	if (!dentry)
 		return ERR_PTR(-ECHILD);
 
-	link = kmalloc(MAXPATHLEN+1, GFP_KERNEL);
+	link = kmalloc(XFS_SYMLINK_MAXLEN+1, GFP_KERNEL);
 	if (!link)
 		goto out_err;
 
@@ -522,12 +522,20 @@ xfs_vn_getattr(
 		}
 	}
 
+	/*
+	 * Note: If you add another clause to set an attribute flag, please
+	 * update attributes_mask below.
+	 */
 	if (ip->i_d.di_flags & XFS_DIFLAG_IMMUTABLE)
 		stat->attributes |= STATX_ATTR_IMMUTABLE;
 	if (ip->i_d.di_flags & XFS_DIFLAG_APPEND)
 		stat->attributes |= STATX_ATTR_APPEND;
 	if (ip->i_d.di_flags & XFS_DIFLAG_NODUMP)
 		stat->attributes |= STATX_ATTR_NODUMP;
+
+	stat->attributes_mask |= (STATX_ATTR_IMMUTABLE |
+				  STATX_ATTR_APPEND |
+				  STATX_ATTR_NODUMP);
 
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFBLK:
@@ -873,7 +881,9 @@ xfs_setattr_size(
 	 * truncate.
 	 */
 	if (newsize > oldsize) {
-		error = xfs_zero_eof(ip, newsize, oldsize, &did_zeroing);
+		trace_xfs_zero_eof(ip, oldsize, newsize - oldsize);
+		error = iomap_zero_range(inode, oldsize, newsize - oldsize,
+				&did_zeroing, &xfs_iomap_ops);
 	} else {
 		error = iomap_truncate_page(inode, newsize, &did_zeroing,
 				&xfs_iomap_ops);

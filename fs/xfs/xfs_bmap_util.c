@@ -992,7 +992,7 @@ xfs_alloc_file_space(
 		/*
 		 * Complete the transaction
 		 */
-		error = xfs_defer_finish(&tp, &dfops, NULL);
+		error = xfs_defer_finish(&tp, &dfops);
 		if (error)
 			goto error0;
 
@@ -1058,7 +1058,8 @@ xfs_unmap_extent(
 	if (error)
 		goto out_bmap_cancel;
 
-	error = xfs_defer_finish(&tp, &dfops, ip);
+	xfs_defer_ijoin(&dfops, ip);
+	error = xfs_defer_finish(&tp, &dfops);
 	if (error)
 		goto out_bmap_cancel;
 
@@ -1112,7 +1113,7 @@ xfs_adjust_extent_unmap_boundaries(
 	return 0;
 }
 
-static int
+int
 xfs_flush_unmap_range(
 	struct xfs_inode	*ip,
 	xfs_off_t		offset,
@@ -1189,18 +1190,15 @@ xfs_free_file_space(
 
 	/*
 	 * Now that we've unmap all full blocks we'll have to zero out any
-	 * partial block at the beginning and/or end.  xfs_zero_range is
-	 * smart enough to skip any holes, including those we just created,
-	 * but we must take care not to zero beyond EOF and enlarge i_size.
+	 * partial block at the beginning and/or end.  iomap_zero_range is smart
+	 * enough to skip any holes, including those we just created, but we
+	 * must take care not to zero beyond EOF and enlarge i_size.
 	 */
-
 	if (offset >= XFS_ISIZE(ip))
 		return 0;
-
 	if (offset + len > XFS_ISIZE(ip))
 		len = XFS_ISIZE(ip) - offset;
-
-	return xfs_zero_range(ip, offset, len, NULL);
+	return iomap_zero_range(VFS_I(ip), offset, len, NULL, &xfs_iomap_ops);
 }
 
 /*
@@ -1349,7 +1347,7 @@ xfs_collapse_file_space(
 		if (error)
 			goto out_bmap_cancel;
 
-		error = xfs_defer_finish(&tp, &dfops, NULL);
+		error = xfs_defer_finish(&tp, &dfops);
 		if (error)
 			goto out_bmap_cancel;
 		error = xfs_trans_commit(tp);
@@ -1424,7 +1422,7 @@ xfs_insert_file_space(
 		if (error)
 			goto out_bmap_cancel;
 
-		error = xfs_defer_finish(&tp, &dfops, NULL);
+		error = xfs_defer_finish(&tp, &dfops);
 		if (error)
 			goto out_bmap_cancel;
 		error = xfs_trans_commit(tp);
@@ -1649,7 +1647,8 @@ xfs_swap_extent_rmap(
 			if (error)
 				goto out_defer;
 
-			error = xfs_defer_finish(tpp, &dfops, ip);
+			xfs_defer_ijoin(&dfops, ip);
+			error = xfs_defer_finish(tpp, &dfops);
 			if (error)
 				goto out_defer;
 
@@ -1809,7 +1808,7 @@ xfs_swap_change_owner(
 		if (error != -EAGAIN)
 			break;
 
-		error = xfs_trans_roll(tpp, NULL);
+		error = xfs_trans_roll(tpp);
 		if (error)
 			break;
 		tp = *tpp;
@@ -1851,7 +1850,7 @@ xfs_swap_extents(
 	 */
 	lock_two_nondirectories(VFS_I(ip), VFS_I(tip));
 	lock_flags = XFS_MMAPLOCK_EXCL;
-	xfs_lock_two_inodes(ip, tip, XFS_MMAPLOCK_EXCL);
+	xfs_lock_two_inodes(ip, XFS_MMAPLOCK_EXCL, tip, XFS_MMAPLOCK_EXCL);
 
 	/* Verify that both files have the same format */
 	if ((VFS_I(ip)->i_mode & S_IFMT) != (VFS_I(tip)->i_mode & S_IFMT)) {
@@ -1898,7 +1897,7 @@ xfs_swap_extents(
 	 * Lock and join the inodes to the tansaction so that transaction commit
 	 * or cancel will unlock the inodes from this point onwards.
 	 */
-	xfs_lock_two_inodes(ip, tip, XFS_ILOCK_EXCL);
+	xfs_lock_two_inodes(ip, XFS_ILOCK_EXCL, tip, XFS_ILOCK_EXCL);
 	lock_flags |= XFS_ILOCK_EXCL;
 	xfs_trans_ijoin(tp, ip, 0);
 	xfs_trans_ijoin(tp, tip, 0);

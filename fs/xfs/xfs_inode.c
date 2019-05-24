@@ -40,6 +40,7 @@
 #include "xfs_ialloc.h"
 #include "xfs_bmap.h"
 #include "xfs_bmap_util.h"
+#include "xfs_errortag.h"
 #include "xfs_error.h"
 #include "xfs_quota.h"
 #include "xfs_filestream.h"
@@ -567,23 +568,36 @@ again:
 
 /*
  * xfs_lock_two_inodes() can only be used to lock one type of lock at a time -
- * the iolock, the mmaplock or the ilock, but not more than one at a time. If we
- * lock more than one at a time, lockdep will report false positives saying we
- * have violated locking orders.
+ * the mmaplock or the ilock, but not more than one type at a time. If we lock
+ * more than one at a time, lockdep will report false positives saying we have
+ * violated locking orders.  The iolock must be double-locked separately since
+ * we use i_rwsem for that.  We now support taking one lock EXCL and the other
+ * SHARED.
  */
 void
 xfs_lock_two_inodes(
-	xfs_inode_t		*ip0,
-	xfs_inode_t		*ip1,
-	uint			lock_mode)
+	struct xfs_inode	*ip0,
+	uint			ip0_mode,
+	struct xfs_inode	*ip1,
+	uint			ip1_mode)
 {
-	xfs_inode_t		*temp;
+	struct xfs_inode	*temp;
+	uint			mode_temp;
 	int			attempts = 0;
 	xfs_log_item_t		*lp;
 
-	ASSERT(!(lock_mode & (XFS_IOLOCK_SHARED|XFS_IOLOCK_EXCL)));
-	if (lock_mode & (XFS_MMAPLOCK_SHARED|XFS_MMAPLOCK_EXCL))
-		ASSERT(!(lock_mode & (XFS_ILOCK_SHARED|XFS_ILOCK_EXCL)));
+	ASSERT(hweight32(ip0_mode) == 1);
+	ASSERT(hweight32(ip1_mode) == 1);
+	ASSERT(!(ip0_mode & (XFS_IOLOCK_SHARED|XFS_IOLOCK_EXCL)));
+	ASSERT(!(ip1_mode & (XFS_IOLOCK_SHARED|XFS_IOLOCK_EXCL)));
+	ASSERT(!(ip0_mode & (XFS_MMAPLOCK_SHARED|XFS_MMAPLOCK_EXCL)) ||
+	       !(ip0_mode & (XFS_ILOCK_SHARED|XFS_ILOCK_EXCL)));
+	ASSERT(!(ip1_mode & (XFS_MMAPLOCK_SHARED|XFS_MMAPLOCK_EXCL)) ||
+	       !(ip1_mode & (XFS_ILOCK_SHARED|XFS_ILOCK_EXCL)));
+	ASSERT(!(ip1_mode & (XFS_MMAPLOCK_SHARED|XFS_MMAPLOCK_EXCL)) ||
+	       !(ip0_mode & (XFS_ILOCK_SHARED|XFS_ILOCK_EXCL)));
+	ASSERT(!(ip0_mode & (XFS_MMAPLOCK_SHARED|XFS_MMAPLOCK_EXCL)) ||
+	       !(ip1_mode & (XFS_ILOCK_SHARED|XFS_ILOCK_EXCL)));
 
 	ASSERT(ip0->i_ino != ip1->i_ino);
 
@@ -591,10 +605,13 @@ xfs_lock_two_inodes(
 		temp = ip0;
 		ip0 = ip1;
 		ip1 = temp;
+		mode_temp = ip0_mode;
+		ip0_mode = ip1_mode;
+		ip1_mode = mode_temp;
 	}
 
  again:
-	xfs_ilock(ip0, xfs_lock_inumorder(lock_mode, 0));
+	xfs_ilock(ip0, xfs_lock_inumorder(ip0_mode, 0));
 
 	/*
 	 * If the first lock we have locked is in the AIL, we must TRY to get
@@ -603,17 +620,16 @@ xfs_lock_two_inodes(
 	 */
 	lp = (xfs_log_item_t *)ip0->i_itemp;
 	if (lp && (lp->li_flags & XFS_LI_IN_AIL)) {
-		if (!xfs_ilock_nowait(ip1, xfs_lock_inumorder(lock_mode, 1))) {
-			xfs_iunlock(ip0, lock_mode);
+		if (!xfs_ilock_nowait(ip1, xfs_lock_inumorder(ip1_mode, 1))) {
+			xfs_iunlock(ip0, ip0_mode);
 			if ((++attempts % 5) == 0)
 				delay(1); /* Don't just spin the CPU */
 			goto again;
 		}
 	} else {
-		xfs_ilock(ip1, xfs_lock_inumorder(lock_mode, 1));
+		xfs_ilock(ip1, xfs_lock_inumorder(ip1_mode, 1));
 	}
 }
-
 
 void
 __xfs_iflock(
@@ -1056,7 +1072,7 @@ xfs_dir_ialloc(
 			tp->t_flags &= ~(XFS_TRANS_DQ_DIRTY);
 		}
 
-		code = xfs_trans_roll(&tp, NULL);
+		code = xfs_trans_roll(&tp);
 		if (committed != NULL)
 			*committed = 1;
 
@@ -1285,7 +1301,7 @@ xfs_create(
 	 */
 	xfs_qm_vop_create_dqattach(tp, ip, udqp, gdqp, pdqp);
 
-	error = xfs_defer_finish(&tp, &dfops, NULL);
+	error = xfs_defer_finish(&tp, &dfops);
 	if (error)
 		goto out_bmap_cancel;
 
@@ -1461,7 +1477,7 @@ xfs_link(
 	if (error)
 		goto std_return;
 
-	xfs_lock_two_inodes(sip, tdp, XFS_ILOCK_EXCL);
+	xfs_lock_two_inodes(sip, XFS_ILOCK_EXCL, tdp, XFS_ILOCK_EXCL);
 
 	xfs_trans_ijoin(tp, sip, XFS_ILOCK_EXCL);
 	xfs_trans_ijoin(tp, tdp, XFS_ILOCK_EXCL);
@@ -1513,7 +1529,7 @@ xfs_link(
 	if (mp->m_flags & (XFS_MOUNT_WSYNC|XFS_MOUNT_DIRSYNC))
 		xfs_trans_set_sync(tp);
 
-	error = xfs_defer_finish(&tp, &dfops, NULL);
+	error = xfs_defer_finish(&tp, &dfops);
 	if (error) {
 		xfs_defer_cancel(&dfops);
 		goto error_return;
@@ -1607,11 +1623,12 @@ xfs_itruncate_extents(
 		 * Duplicate the transaction that has the permanent
 		 * reservation and commit the old transaction.
 		 */
-		error = xfs_defer_finish(&tp, &dfops, ip);
+		xfs_defer_ijoin(&dfops, ip);
+		error = xfs_defer_finish(&tp, &dfops);
 		if (error)
 			goto out_bmap_cancel;
 
-		error = xfs_trans_roll(&tp, ip);
+		error = xfs_trans_roll_inode(&tp, ip);
 		if (error)
 			goto out;
 	}
@@ -1857,7 +1874,7 @@ xfs_inactive_ifree(
 	 * Just ignore errors at this point.  There is nothing we can do except
 	 * to try to keep going. Make sure it's not a silent error.
 	 */
-	error = xfs_defer_finish(&tp, &dfops, NULL);
+	error = xfs_defer_finish(&tp, &dfops);
 	if (error) {
 		xfs_notice(mp, "%s: xfs_defer_finish returned error %d",
 			__func__, error);
@@ -2594,7 +2611,7 @@ xfs_remove(
 		goto std_return;
 	}
 
-	xfs_lock_two_inodes(dp, ip, XFS_ILOCK_EXCL);
+	xfs_lock_two_inodes(dp, XFS_ILOCK_EXCL, ip, XFS_ILOCK_EXCL);
 
 	xfs_trans_ijoin(tp, dp, XFS_ILOCK_EXCL);
 	xfs_trans_ijoin(tp, ip, XFS_ILOCK_EXCL);
@@ -2653,7 +2670,7 @@ xfs_remove(
 	if (mp->m_flags & (XFS_MOUNT_WSYNC|XFS_MOUNT_DIRSYNC))
 		xfs_trans_set_sync(tp);
 
-	error = xfs_defer_finish(&tp, &dfops, NULL);
+	error = xfs_defer_finish(&tp, &dfops);
 	if (error)
 		goto out_bmap_cancel;
 
@@ -2739,7 +2756,7 @@ xfs_finish_rename(
 	if (tp->t_mountp->m_flags & (XFS_MOUNT_WSYNC|XFS_MOUNT_DIRSYNC))
 		xfs_trans_set_sync(tp);
 
-	error = xfs_defer_finish(&tp, dfops, NULL);
+	error = xfs_defer_finish(&tp, dfops);
 	if (error) {
 		xfs_defer_cancel(dfops);
 		xfs_trans_cancel(tp);
@@ -3507,7 +3524,7 @@ xfs_iflush_int(
 	dip = xfs_buf_offset(bp, ip->i_imap.im_boffset);
 
 	if (XFS_TEST_ERROR(dip->di_magic != cpu_to_be16(XFS_DINODE_MAGIC),
-			       mp, XFS_ERRTAG_IFLUSH_1, XFS_RANDOM_IFLUSH_1)) {
+			       mp, XFS_ERRTAG_IFLUSH_1)) {
 		xfs_alert_tag(mp, XFS_PTAG_IFLUSH,
 			"%s: Bad inode %Lu magic number 0x%x, ptr 0x%p",
 			__func__, ip->i_ino, be16_to_cpu(dip->di_magic), dip);
@@ -3517,7 +3534,7 @@ xfs_iflush_int(
 		if (XFS_TEST_ERROR(
 		    (ip->i_d.di_format != XFS_DINODE_FMT_EXTENTS) &&
 		    (ip->i_d.di_format != XFS_DINODE_FMT_BTREE),
-		    mp, XFS_ERRTAG_IFLUSH_3, XFS_RANDOM_IFLUSH_3)) {
+		    mp, XFS_ERRTAG_IFLUSH_3)) {
 			xfs_alert_tag(mp, XFS_PTAG_IFLUSH,
 				"%s: Bad regular inode %Lu, ptr 0x%p",
 				__func__, ip->i_ino, ip);
@@ -3528,7 +3545,7 @@ xfs_iflush_int(
 		    (ip->i_d.di_format != XFS_DINODE_FMT_EXTENTS) &&
 		    (ip->i_d.di_format != XFS_DINODE_FMT_BTREE) &&
 		    (ip->i_d.di_format != XFS_DINODE_FMT_LOCAL),
-		    mp, XFS_ERRTAG_IFLUSH_4, XFS_RANDOM_IFLUSH_4)) {
+		    mp, XFS_ERRTAG_IFLUSH_4)) {
 			xfs_alert_tag(mp, XFS_PTAG_IFLUSH,
 				"%s: Bad directory inode %Lu, ptr 0x%p",
 				__func__, ip->i_ino, ip);
@@ -3536,8 +3553,7 @@ xfs_iflush_int(
 		}
 	}
 	if (XFS_TEST_ERROR(ip->i_d.di_nextents + ip->i_d.di_anextents >
-				ip->i_d.di_nblocks, mp, XFS_ERRTAG_IFLUSH_5,
-				XFS_RANDOM_IFLUSH_5)) {
+				ip->i_d.di_nblocks, mp, XFS_ERRTAG_IFLUSH_5)) {
 		xfs_alert_tag(mp, XFS_PTAG_IFLUSH,
 			"%s: detected corrupt incore inode %Lu, "
 			"total extents = %d, nblocks = %Ld, ptr 0x%p",
@@ -3547,7 +3563,7 @@ xfs_iflush_int(
 		goto corrupt_out;
 	}
 	if (XFS_TEST_ERROR(ip->i_d.di_forkoff > mp->m_sb.sb_inodesize,
-				mp, XFS_ERRTAG_IFLUSH_6, XFS_RANDOM_IFLUSH_6)) {
+				mp, XFS_ERRTAG_IFLUSH_6)) {
 		xfs_alert_tag(mp, XFS_PTAG_IFLUSH,
 			"%s: bad inode %Lu, forkoff 0x%x, ptr 0x%p",
 			__func__, ip->i_ino, ip->i_d.di_forkoff, ip);

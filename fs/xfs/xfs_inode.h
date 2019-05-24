@@ -436,7 +436,8 @@ void		xfs_iunpin_wait(xfs_inode_t *);
 #define xfs_ipincount(ip)	((unsigned int) atomic_read(&ip->i_pincount))
 
 int		xfs_iflush(struct xfs_inode *, struct xfs_buf **);
-void		xfs_lock_two_inodes(xfs_inode_t *, xfs_inode_t *, uint);
+void		xfs_lock_two_inodes(struct xfs_inode *ip0, uint ip0_mode,
+				struct xfs_inode *ip1, uint ip1_mode);
 
 xfs_extlen_t	xfs_get_extsz_hint(struct xfs_inode *ip);
 xfs_extlen_t	xfs_get_cowextsz_hint(struct xfs_inode *ip);
@@ -455,10 +456,6 @@ enum xfs_prealloc_flags {
 
 int	xfs_update_prealloc_flags(struct xfs_inode *ip,
 				  enum xfs_prealloc_flags flags);
-int	xfs_zero_eof(struct xfs_inode *ip, xfs_off_t offset,
-		     xfs_fsize_t isize, bool *did_zeroing);
-int	xfs_zero_range(struct xfs_inode *ip, xfs_off_t pos, xfs_off_t count,
-		bool *did_zero);
 int	xfs_break_layouts(struct inode *inode, uint *iolock,
 		enum layout_break_reason reason);
 
