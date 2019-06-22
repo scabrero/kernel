@@ -353,6 +353,7 @@ struct pci_dev {
 #ifndef __GENKSYMS__
 	unsigned int	clear_retrain_link:1;	/* Need to clear Retrain Link
 						   bit manually */
+	unsigned int	skip_bus_pm:1;	/* Internal: Skip bus-level PM */
 #endif
 	unsigned int	d3_delay;	/* D3->D0 transition time in ms */
 	unsigned int	d3cold_delay;	/* D3cold->D0 transition time in ms */
@@ -408,6 +409,9 @@ struct pci_dev {
 	unsigned int	irq_managed:1;
 	unsigned int	has_secondary_link:1;
 	unsigned int	non_compliant_bars:1;	/* broken BARs; ignore them */
+#ifndef __GENKSYMS__
+	unsigned int	no_vf_scan:1;		/* Don't scan for VFs after IOV enablement */
+#endif
 	pci_dev_flags_t dev_flags;
 	atomic_t	enable_cnt;	/* pci_enable_device has been called */
 
