@@ -1013,7 +1013,7 @@ static u32 msrs_to_save[] = {
 #endif
 	MSR_IA32_TSC, MSR_IA32_CR_PAT, MSR_VM_HSAVE_PA,
 	MSR_IA32_FEATURE_CONTROL, MSR_IA32_BNDCFGS, MSR_TSC_AUX,
-	MSR_IA32_SPEC_CTRL, MSR_IA32_ARCH_CAPABILITIES
+	MSR_IA32_SPEC_CTRL,
 };
 
 static unsigned num_msrs_to_save;
@@ -1040,6 +1040,7 @@ static u32 emulated_msrs[] = {
 
 	MSR_IA32_TSC_ADJUST,
 	MSR_IA32_TSCDEADLINE,
+	MSR_IA32_ARCH_CAPABILITIES,
 	MSR_IA32_MISC_ENABLE,
 	MSR_IA32_MCG_STATUS,
 	MSR_IA32_MCG_CTL,
@@ -6023,12 +6024,13 @@ restart:
 		unsigned long rflags = kvm_x86_ops->get_rflags(vcpu);
 		toggle_interruptibility(vcpu, ctxt->interruptibility);
 		vcpu->arch.emulate_regs_need_sync_to_vcpu = false;
-		kvm_rip_write(vcpu, ctxt->eip);
-		if (r == EMULATE_DONE && ctxt->tf)
-			kvm_vcpu_do_singlestep(vcpu, &r);
 		if (!ctxt->have_exception ||
-		    exception_type(ctxt->exception.vector) == EXCPT_TRAP)
+		    exception_type(ctxt->exception.vector) == EXCPT_TRAP) {
+			kvm_rip_write(vcpu, ctxt->eip);
+			if (r == EMULATE_DONE && ctxt->tf)
+				kvm_vcpu_do_singlestep(vcpu, &r);
 			__kvm_set_rflags(vcpu, ctxt->eflags);
+		}
 
 		/*
 		 * For STI, interrupts are shadowed; so KVM_REQ_EVENT will
