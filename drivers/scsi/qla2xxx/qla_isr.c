@@ -2533,7 +2533,7 @@ qla2x00_status_entry(scsi_qla_host_t *vha, struct rsp_que *rsp, void *pkt)
 		/* Valid values of the retry delay timer are 0x1-0xffef */
 		if (sts24->retry_delay > 0 && sts24->retry_delay < 0xfff1) {
 			retry_delay = sts24->retry_delay & 0x3fff;
-			ql_dbg(ql_dbg_io, vha, 0x3033,
+			ql_dbg(ql_dbg_io, sp->vha, 0x3033,
 			    "%s: scope=%#x retry_delay=%#x\n", __func__,
 			    sts24->retry_delay >> 14, retry_delay);
 		}
@@ -2780,8 +2780,6 @@ out:
 
 	if (rsp->status_srb == NULL)
 		sp->done(sp, res);
-	else
-		WARN_ON_ONCE(true);
 }
 
 /**
@@ -2839,8 +2837,6 @@ qla2x00_status_cont_entry(struct rsp_que *rsp, sts_cont_entry_t *pkt)
 	if (sense_len == 0) {
 		rsp->status_srb = NULL;
 		sp->done(sp, cp->result);
-	} else {
-		WARN_ON_ONCE(true);
 	}
 }
 

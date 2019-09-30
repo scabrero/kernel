@@ -202,7 +202,7 @@ int ql2xasynctmfenable = 1;
 module_param(ql2xasynctmfenable, int, S_IRUGO);
 MODULE_PARM_DESC(ql2xasynctmfenable,
 		"Enables issue of TM IOCBs asynchronously via IOCB mechanism"
-		"Default is 0 - Issue TM IOCBs via mailbox mechanism.");
+		"Default is 1 - Issue TM IOCBs via mailbox mechanism.");
 
 int ql2xdontresethba;
 module_param(ql2xdontresethba, int, S_IRUGO|S_IWUSR);
@@ -3437,6 +3437,12 @@ skip_dpc:
 	return 0;
 
 probe_failed:
+	if (base_vha->gnl.l) {
+		dma_free_coherent(&ha->pdev->dev, base_vha->gnl.size,
+				base_vha->gnl.l, base_vha->gnl.ldma);
+		base_vha->gnl.l = NULL;
+	}
+
 	if (base_vha->timer_active)
 		qla2x00_stop_timer(base_vha);
 	base_vha->flags.online = 0;
@@ -3670,7 +3676,7 @@ qla2x00_remove_one(struct pci_dev *pdev)
 	if (!atomic_read(&pdev->enable_cnt)) {
 		dma_free_coherent(&ha->pdev->dev, base_vha->gnl.size,
 		    base_vha->gnl.l, base_vha->gnl.ldma);
-
+		base_vha->gnl.l = NULL;
 		scsi_host_put(base_vha->host);
 		kfree(ha);
 		pci_set_drvdata(pdev, NULL);
@@ -3709,6 +3715,8 @@ qla2x00_remove_one(struct pci_dev *pdev)
 
 	dma_free_coherent(&ha->pdev->dev,
 		base_vha->gnl.size, base_vha->gnl.l, base_vha->gnl.ldma);
+
+	base_vha->gnl.l = NULL;
 
 	vfree(base_vha->scan.l);
 
@@ -4812,6 +4820,7 @@ struct scsi_qla_host *qla2x00_create_host(struct scsi_host_template *sht,
 		    "Alloc failed for scan database.\n");
 		dma_free_coherent(&ha->pdev->dev, vha->gnl.size,
 		    vha->gnl.l, vha->gnl.ldma);
+		vha->gnl.l = NULL;
 		scsi_host_put(vha->host);
 		return NULL;
 	}
@@ -5033,6 +5042,7 @@ void qla24xx_create_new_sess(struct scsi_qla_host *vha, struct qla_work_evt *e)
 				fcport->fc4_type = FC4_TYPE_OTHER;
 				fcport->fc4f_nvme = FC4_TYPE_NVME;
 			}
+
 			memcpy(fcport->port_name, e->u.new_sess.port_name,
 			    WWN_SIZE);
 		} else {
