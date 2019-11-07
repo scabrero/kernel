@@ -1040,7 +1040,7 @@ lpfc_bsg_ct_unsol_event(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 				if (!dmabuf) {
 					lpfc_printf_log(phba, KERN_ERR,
 						LOG_LIBDFC, "2616 No dmabuf "
-						"found for iocbq 0x%p\n",
+						"found for iocbq x%px\n",
 						iocbq);
 					kfree(evt_dat->data);
 					kfree(evt_dat);
@@ -2919,9 +2919,6 @@ diag_cmd_data_alloc(struct lpfc_hba *phba,
 
 		if (nocopydata) {
 			bpl->tus.f.bdeFlags = 0;
-			pci_dma_sync_single_for_device(phba->pcidev,
-				dmp->dma.phys, LPFC_BPL_SIZE, PCI_DMA_TODEVICE);
-
 		} else {
 			memset((uint8_t *)dmp->dma.virt, 0, cnt);
 			bpl->tus.f.bdeFlags = BUFF_TYPE_BDE_64I;
@@ -5441,10 +5438,12 @@ lpfc_bsg_get_ras_config(struct bsg_job *job)
 		bsg_reply->reply_data.vendor_reply.vendor_rsp;
 
 	/* Current logging state */
-	if (ras_fwlog->ras_active == true)
+	spin_lock_irq(&phba->hbalock);
+	if (ras_fwlog->state == ACTIVE)
 		ras_reply->state = LPFC_RASLOG_STATE_RUNNING;
 	else
 		ras_reply->state = LPFC_RASLOG_STATE_STOPPED;
+	spin_unlock_irq(&phba->hbalock);
 
 	ras_reply->log_level = phba->ras_fwlog.fw_loglevel;
 	ras_reply->log_buff_sz = phba->cfg_ras_fwlog_buffsize;
@@ -5454,7 +5453,9 @@ ras_job_error:
 	bsg_reply->result = rc;
 
 	/* complete the job back to userspace */
-	bsg_job_done(job, bsg_reply->result, bsg_reply->reply_payload_rcv_len);
+	if (!rc)
+		bsg_job_done(job, bsg_reply->result,
+			     bsg_reply->reply_payload_rcv_len);
 	return rc;
 }
 
@@ -5499,10 +5500,13 @@ lpfc_bsg_set_ras_config(struct bsg_job *job)
 
 	if (action == LPFC_RASACTION_STOP_LOGGING) {
 		/* Check if already disabled */
-		if (ras_fwlog->ras_active == false) {
+		spin_lock_irq(&phba->hbalock);
+		if (ras_fwlog->state != ACTIVE) {
+			spin_unlock_irq(&phba->hbalock);
 			rc = -ESRCH;
 			goto ras_job_error;
 		}
+		spin_unlock_irq(&phba->hbalock);
 
 		/* Disable logging */
 		lpfc_ras_stop_fwlog(phba);
@@ -5513,8 +5517,10 @@ lpfc_bsg_set_ras_config(struct bsg_job *job)
 		 * FW-logging with new log-level. Return status
 		 * "Logging already Running" to caller.
 		 **/
-		if (ras_fwlog->ras_active)
+		spin_lock_irq(&phba->hbalock);
+		if (ras_fwlog->state != INACTIVE)
 			action_status = -EINPROGRESS;
+		spin_unlock_irq(&phba->hbalock);
 
 		/* Enable logging */
 		rc = lpfc_sli4_ras_fwlog_init(phba, log_level,
@@ -5533,8 +5539,9 @@ ras_job_error:
 	bsg_reply->result = rc;
 
 	/* complete the job back to userspace */
-	bsg_job_done(job, bsg_reply->result,
-		       bsg_reply->reply_payload_rcv_len);
+	if (!rc)
+		bsg_job_done(job, bsg_reply->result,
+			     bsg_reply->reply_payload_rcv_len);
 
 	return rc;
 }
@@ -5594,7 +5601,9 @@ ras_job_error:
 	bsg_reply->result = rc;
 
 	/* complete the job back to userspace */
-	bsg_job_done(job, bsg_reply->result, bsg_reply->reply_payload_rcv_len);
+	if (!rc)
+		bsg_job_done(job, bsg_reply->result,
+			     bsg_reply->reply_payload_rcv_len);
 
 	return rc;
 }
@@ -5627,10 +5636,13 @@ lpfc_bsg_get_ras_fwlog(struct bsg_job *job)
 		goto ras_job_error;
 
 	/* Logging to be stopped before reading */
-	if (ras_fwlog->ras_active == true) {
+	spin_lock_irq(&phba->hbalock);
+	if (ras_fwlog->state == ACTIVE) {
+		spin_unlock_irq(&phba->hbalock);
 		rc = -EINPROGRESS;
 		goto ras_job_error;
 	}
+	spin_unlock_irq(&phba->hbalock);
 
 	if (job->request_len <
 	    sizeof(struct fc_bsg_request) +
@@ -5676,7 +5688,9 @@ lpfc_bsg_get_ras_fwlog(struct bsg_job *job)
 
 ras_job_error:
 	bsg_reply->result = rc;
-	bsg_job_done(job, bsg_reply->result, bsg_reply->reply_payload_rcv_len);
+	if (!rc)
+		bsg_job_done(job, bsg_reply->result,
+			     bsg_reply->reply_payload_rcv_len);
 
 	return rc;
 }
@@ -5747,8 +5761,9 @@ lpfc_get_trunk_info(struct bsg_job *job)
 				phba->sli4_hba.link_state.logical_speed / 1000;
 job_error:
 	bsg_reply->result = rc;
-	bsg_job_done(job, bsg_reply->result,
-		       bsg_reply->reply_payload_rcv_len);
+	if (!rc)
+		bsg_job_done(job, bsg_reply->result,
+			     bsg_reply->reply_payload_rcv_len);
 	return rc;
 
 }

@@ -35,7 +35,7 @@
 /* Used for NVME Target */
 struct lpfc_nvmet_tgtport {
 	struct lpfc_hba *phba;
-	struct completion tport_unreg_done;
+	struct completion *tport_unreg_cmp;
 
 	/* Stats counters - lpfc_nvmet_unsol_ls_buffer */
 	atomic_t rcv_ls_req_in;
@@ -112,9 +112,7 @@ struct lpfc_nvmet_rcv_ctx {
 	struct lpfc_hba *phba;
 	struct lpfc_iocbq *wqeq;
 	struct lpfc_iocbq *abort_wqeq;
-	dma_addr_t txrdy_phys;
 	spinlock_t ctxlock; /* protect flag access */
-	uint32_t *txrdy;
 	uint32_t sid;
 	uint32_t offset;
 	uint16_t oxid;

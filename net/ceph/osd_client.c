@@ -443,6 +443,8 @@ static void osd_req_op_data_release(struct ceph_osd_request *osd_req,
 		break;
 	case CEPH_OSD_OP_SETXATTR:
 	case CEPH_OSD_OP_CMPXATTR:
+		ceph_osd_data_release(&op->xattr.request_data);
+		break;
 	case CEPH_OSD_OP_GETXATTR:
 		ceph_osd_data_release(&op->xattr.request_data);
 		ceph_osd_data_release(&op->xattr.response_data);
@@ -750,6 +752,8 @@ static void get_num_data_items(struct ceph_osd_request *req,
 		/* request */
 		case CEPH_OSD_OP_WRITE:
 		case CEPH_OSD_OP_WRITEFULL:
+		case CEPH_OSD_OP_SETXATTR:
+		case CEPH_OSD_OP_CMPXATTR:
 		case CEPH_OSD_OP_NOTIFY_ACK:
 		case CEPH_OSD_OP_CMPEXT:
 		case CEPH_OSD_OP_WRITESAME:
@@ -765,8 +769,6 @@ static void get_num_data_items(struct ceph_osd_request *req,
 
 		/* both */
 		case CEPH_OSD_OP_GETXATTR:
-		case CEPH_OSD_OP_SETXATTR:
-		case CEPH_OSD_OP_CMPXATTR:
 		case CEPH_OSD_OP_NOTIFY:
 			*num_request_data_items += 1;
 			*num_reply_data_items += 1;
@@ -1597,7 +1599,7 @@ static enum calc_target_result calc_target(struct ceph_osd_client *osdc,
 	struct ceph_osds up, acting;
 	bool force_resend = false;
 	bool unpaused = false;
-	bool legacy_change;
+	bool legacy_change = false;
 	bool split = false;
 	bool sort_bitwise = ceph_osdmap_flag(osdc, CEPH_OSDMAP_SORTBITWISE);
 	bool recovery_deletes = ceph_osdmap_flag(osdc,
@@ -1685,15 +1687,14 @@ static enum calc_target_result calc_target(struct ceph_osd_client *osdc,
 		t->osd = acting.primary;
 	}
 
-	if (unpaused || legacy_change || force_resend ||
-	    (split && con && CEPH_HAVE_FEATURE(con->peer_features,
-					       RESEND_ON_SPLIT)))
+	if (unpaused || legacy_change || force_resend || split)
 		ct_res = CALC_TARGET_NEED_RESEND;
 	else
 		ct_res = CALC_TARGET_NO_ACTION;
 
 out:
-	dout("%s t %p -> ct_res %d osd %d\n", __func__, t, ct_res, t->osd);
+	dout("%s t %p -> %d%d%d%d ct_res %d osd%d\n", __func__, t, unpaused,
+	     legacy_change, force_resend, split, ct_res, t->osd);
 	return ct_res;
 }
 
@@ -2048,13 +2049,10 @@ static void setup_request_data(struct ceph_osd_request *req)
 			break;
 		case CEPH_OSD_OP_SETXATTR:
 		case CEPH_OSD_OP_CMPXATTR:
-		case CEPH_OSD_OP_GETXATTR:
 			WARN_ON(op->indata_len != op->xattr.name_len +
 						  op->xattr.value_len);
 			ceph_osdc_msg_data_add(request_msg,
 					       &op->xattr.request_data);
-			ceph_osdc_msg_data_add(reply_msg,
-					       &op->xattr.response_data);
 			break;
 		case CEPH_OSD_OP_NOTIFY_ACK:
 			ceph_osdc_msg_data_add(request_msg,
@@ -2095,6 +2093,12 @@ static void setup_request_data(struct ceph_osd_request *req)
 			ceph_osdc_msg_data_add(reply_msg,
 					       &op->notify.response_data);
 			break;
+		case CEPH_OSD_OP_GETXATTR:
+			WARN_ON(op->indata_len != op->xattr.name_len);
+			ceph_osdc_msg_data_add(request_msg,
+					       &op->xattr.request_data);
+			ceph_osdc_msg_data_add(reply_msg,
+					       &op->xattr.response_data);
 		}
 	}
 }
@@ -5011,20 +5015,26 @@ static int decode_watcher(void **p, void *end, struct ceph_watch_item *item)
 	ret = ceph_start_decoding(p, end, 2, "watch_item_t",
 				  &struct_v, &struct_len);
 	if (ret)
-		return ret;
+		goto bad;
 
-	ceph_decode_copy(p, &item->name, sizeof(item->name));
-	item->cookie = ceph_decode_64(p);
-	*p += 4; /* skip timeout_seconds */
+	ret = -EINVAL;
+	ceph_decode_copy_safe(p, end, &item->name, sizeof(item->name), bad);
+	ceph_decode_64_safe(p, end, item->cookie, bad);
+	ceph_decode_skip_32(p, end, bad); /* skip timeout seconds */
+
 	if (struct_v >= 2) {
-		ceph_decode_copy(p, &item->addr, sizeof(item->addr));
-		ceph_decode_addr(&item->addr);
+		ret = ceph_decode_entity_addr(p, end, &item->addr);
+		if (ret)
+			goto bad;
+	} else {
+		ret = 0;
 	}
 
 	dout("%s %s%llu cookie %llu addr %s\n", __func__,
 	     ENTITY_NAME(item->name), item->cookie,
-	     ceph_pr_addr(&item->addr.in_addr));
-	return 0;
+	     ceph_pr_addr(&item->addr));
+bad:
+	return ret;
 }
 
 static int decode_watchers(void **p, void *end,
