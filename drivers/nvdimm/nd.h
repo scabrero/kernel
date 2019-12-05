@@ -164,6 +164,9 @@ struct nd_region {
 	struct nd_interleave_set *nd_set;
 	struct nd_percpu_lane __percpu *lane;
 	struct nd_mapping mapping[0];
+#ifndef __GENKSYMS__
+	int target_node;
+#endif
 };
 
 struct nd_blk_region {
