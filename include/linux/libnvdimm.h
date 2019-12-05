@@ -130,6 +130,9 @@ struct nd_region_desc {
 	int numa_node;
 	unsigned long flags;
 	struct device_node *of_node;
+#ifndef __GENKSYMS__
+	int target_node;
+#endif
 };
 
 struct device;
