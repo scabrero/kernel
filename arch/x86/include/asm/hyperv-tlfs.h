@@ -47,6 +47,8 @@
  * to MSRs with local APIC and TSC frequencies.
  */
 #define HV_X64_ACCESS_FREQUENCY_MSRS		(1 << 11)
+/* AccessTscInvariantControls privilege */
+#define HV_X64_ACCESS_TSC_INVARIANT		BIT(15)
 
 /* AccessReenlightenmentControls privilege */
 #define HV_X64_ACCESS_REENLIGHTENMENT		BIT(13)
@@ -233,6 +235,9 @@
 #define HV_X64_MSR_SINT13			0x4000009D
 #define HV_X64_MSR_SINT14			0x4000009E
 #define HV_X64_MSR_SINT15			0x4000009F
+
+/* TSC invariant control */
+#define HV_X64_MSR_TSC_INVARIANT_CONTROL	0x40000118
 
 /*
  * Synthetic Timer MSRs. Four timers per vcpu.
