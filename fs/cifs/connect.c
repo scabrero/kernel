@@ -61,6 +61,9 @@
 #ifdef CONFIG_CIFS_DFS_UPCALL
 #include "dfs_cache.h"
 #endif
+#ifdef CONFIG_CIFS_SWN_UPCALL
+#include "cifs_swn.h"
+#endif
 
 extern mempool_t *cifs_req_poolp;
 extern bool disable_legacy_dialects;
@@ -3571,6 +3574,21 @@ cifs_get_tcon(struct cifs_ses *ses, struct smb_vol *volume_info)
 		}
 		tcon->use_resilient = true;
 	}
+
+#ifdef CONFIG_CIFS_SWN_UPCALL
+	if ((ses->server->vals->protocol_id >= SMB30_PROT_ID) &&
+	    (tcon->capabilities & SMB2_SHARE_CAP_CLUSTER)) {
+		bool share_name_notify =
+			!(tcon->capabilities & SMB2_SHARE_CAP_SCALEOUT);
+		rc = cifs_swn_register(ses->server->hostname,
+				volume_info->UNC, NULL, true,
+				share_name_notify, false);
+		if (rc < 0) {
+			cifs_dbg(VFS, "Failed to establish SWN connection\n");
+			goto out_fail;
+		}
+	}
+#endif
 
 	/* If the user really knows what they are doing they can override */
 	if (tcon->share_flags & SMB2_SHAREFLAG_NO_CACHING) {

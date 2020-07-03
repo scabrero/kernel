@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Netlink routines for CIFS
+ *
+ * Copyright (c) 2020 Samuel Cabrero <scabrero@samba.org>
+ */
+
+
+#ifndef _UAPILINUX_CIFS_NETLINK_H
+#define _UAPILINUX_CIFS_NETLINK_H
+
+#define CIFS_GENL_NAME			"cifs"
+#define CIFS_GENL_VERSION		0x1
+
+#define CIFS_GENL_MCGRP_SWN_NAME	"cifs_mcgrp_swn"
+
+enum cifs_genl_multicast_groups {
+	CIFS_GENL_MCGRP_SWN,
+};
+
+enum cifs_genl_attributes {
+	CIFS_GENL_ATTR_UNSPEC,
+	CIFS_GENL_ATTR_SWN_NET_NAME,
+	CIFS_GENL_ATTR_SWN_SHARE_NAME,
+	CIFS_GENL_ATTR_SWN_IP,
+	CIFS_GENL_ATTR_SWN_NET_NAME_NOTIFY,
+	CIFS_GENL_ATTR_SWN_SHARE_NAME_NOTIFY,
+	CIFS_GENL_ATTR_SWN_IP_NOTIFY,
+	__CIFS_GENL_ATTR_MAX,
+};
+#define CIFS_GENL_ATTR_MAX (__CIFS_GENL_ATTR_MAX - 1)
+
+enum cifs_genl_commands {
+	CIFS_GENL_CMD_UNSPEC,
+	CIFS_GENL_CMD_SWN_REGISTER,
+	CIFS_GENL_CMD_SWN_UNREGISTER,
+	CIFS_GENL_CMD_SWN_NOTIFY,
+	__CIFS_GENL_CMD_MAX
+};
+#define CIFS_GENL_CMD_MAX (__CIFS_GENL_CMD_MAX - 1)
+
+#endif /* _UAPILINUX_CIFS_NETLINK_H */
