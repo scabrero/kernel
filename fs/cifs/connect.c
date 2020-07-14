@@ -342,7 +342,6 @@ static int ip_connect(struct TCP_Server_Info *server);
 static int generic_ip_connect(struct TCP_Server_Info *server);
 static void tlink_rb_insert(struct rb_root *root, struct tcon_link *new_tlink);
 static void cifs_prune_tlinks(struct work_struct *work);
-static char *extract_hostname(const char *unc);
 
 /*
  * Resolve hostname and set ip addr in tcp ses. Useful for hostnames that may
@@ -1281,7 +1280,7 @@ next_pdu:
 }
 
 /* extract the host portion of the UNC string */
-static char *
+char *
 extract_hostname(const char *unc)
 {
 	const char *src;
@@ -3578,11 +3577,7 @@ cifs_get_tcon(struct cifs_ses *ses, struct smb_vol *volume_info)
 #ifdef CONFIG_CIFS_SWN_UPCALL
 	if ((ses->server->vals->protocol_id >= SMB30_PROT_ID) &&
 	    (tcon->capabilities & SMB2_SHARE_CAP_CLUSTER)) {
-		bool share_name_notify =
-			!(tcon->capabilities & SMB2_SHARE_CAP_SCALEOUT);
-		rc = cifs_swn_register(ses->server->hostname,
-				volume_info->UNC, NULL, true,
-				share_name_notify, false);
+		rc = cifs_swn_register(tcon, volume_info);
 		if (rc < 0) {
 			cifs_dbg(VFS, "Failed to establish SWN connection\n");
 			goto out_fail;

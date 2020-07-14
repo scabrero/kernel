@@ -13,11 +13,6 @@ struct genl_info;
 
 extern int cifs_swn_notify(struct sk_buff *skb, struct genl_info *info);
 
-extern int cifs_swn_register(const char *net_name,
-			     const char *share_name,
-			     const char *ip_address,
-			     bool net_name_notification_required,
-			     bool share_name_notification_required,
-			     bool ip_notification_required);
+extern int cifs_swn_register(struct cifs_tcon *tcon, struct smb_vol *volume_info);
 
 #endif /* _CIFS_SWN_H */
